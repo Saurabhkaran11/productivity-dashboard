@@ -1,0 +1,20 @@
+services:
+  mylife:
+    build: .
+    image: mylife-dashboard
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_SECRET=change-me-to-a-long-random-string
+      - CORS_ORIGINS=http://localhost:8000,http://localhost:3000
+      - FRONTEND_URL=http://localhost:8000
+      - MYLIFE_DB=/data/mylife.db
+      # Optional Google OAuth:
+      # - GOOGLE_CLIENT_ID=...
+      # - GOOGLE_CLIENT_SECRET=...
+      # - GOOGLE_REDIRECT_URI=http://localhost:8000/auth/google/callback
+    volumes:
+      - mylife_data:/data
+
+volumes:
+  mylife_data:

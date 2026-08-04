@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+backend/venv/
+.venv/
+
+# Backend database (local dev only — never commit real user data)
+backend/data.db
+backend/data.db-wal
+backend/data.db-shm
+*.db
+*.db-wal
+*.db-shm
+
+# Environment with secrets — NEVER commit
+backend/.env
+.env
+.env.local
+
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
+
+# Playwright binaries / test artifacts
+/playwright*
+.pw/
+/test-results/
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
