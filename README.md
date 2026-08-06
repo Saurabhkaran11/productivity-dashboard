@@ -111,10 +111,10 @@ The web service checks due automations while it is running. For reliable deliver
 
 1. In the **Web Service** environment, add a strong random `CRON_SECRET`.
 2. Create a **Cron Job** in the same Render account and give it two environment variables: `APP_URL` (for example `https://productivity-dashboard-hsr0.onrender.com`) and the same `CRON_SECRET`.
-3. Use schedule `*/5 * * * *` and this command:
+3. Use schedule `*/5 * * * *`. Because this app is Docker-based, set the following as the Cron Job's **Custom Docker Command** under **Advanced**. Render evaluates Cron schedules in UTC; this job only wakes the app, while each user's selected timezone in Settings controls the actual weekly delivery time:
 
 ```bash
-curl --fail --silent --show-error -X POST "$APP_URL/cron/automations" -H "X-Cron-Secret: $CRON_SECRET"
+python -c "import os, requests; response = requests.post(os.environ['APP_URL'].rstrip('/') + '/cron/automations', headers={'X-Cron-Secret': os.environ['CRON_SECRET']}, timeout=60); response.raise_for_status()"
 ```
 
 4. In **Settings → Weekly Google automation**, select the actions you want, choose a day/time, save, then use **Run weekly automation now** to validate the connected products and email delivery. The manual test does not consume that week's scheduled run.

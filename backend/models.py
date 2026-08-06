@@ -34,6 +34,7 @@ class AutomationSettings(BaseModel):
     weekly_report: int = 0
     weekly_report_day: int = 0
     weekly_report_time: str = "09:00"
+    weekly_timezone: str = "UTC"
     auto_sync_sheets: int = 0
     auto_sync_drive: int = 0
     auto_sync_tasks: int = 0

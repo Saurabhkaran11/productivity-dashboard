@@ -2,7 +2,8 @@ import threading
 import time
 import json
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 import os
@@ -1391,6 +1392,7 @@ AUTOMATION_DEFAULTS = {
     "weekly_report": 0,
     "weekly_report_day": 0,
     "weekly_report_time": "09:00",
+    "weekly_timezone": "UTC",
     "auto_sync_sheets": 0,
     "auto_sync_drive": 0,
     "auto_sync_tasks": 0,
@@ -1409,6 +1411,19 @@ def _time_parts(value: str) -> tuple:
     except (TypeError, ValueError):
         pass
     raise ValueError("Time must use the HH:MM format.")
+
+
+def _weekly_local_time(settings: dict, now: datetime = None) -> datetime:
+    """Convert the scheduler's UTC clock into the user's selected IANA zone."""
+    try:
+        zone = ZoneInfo(settings.get("weekly_timezone") or "UTC")
+    except ZoneInfoNotFoundError as e:
+        raise ValueError("Choose a valid IANA timezone, for example America/Los_Angeles.") from e
+    now = now or datetime.now(timezone.utc)
+    # Tests and internal callers may pass a local naive time intentionally.
+    if now.tzinfo is None:
+        return now.replace(tzinfo=zone)
+    return now.astimezone(zone)
 
 
 def _get_automation_settings(user_id: int) -> dict:
@@ -1440,6 +1455,7 @@ def update_automation_settings(
         raise HTTPException(400, "Choose a valid day for the weekly automation.")
     try:
         _time_parts(settings.weekly_report_time)
+        _weekly_local_time({"weekly_timezone": settings.weekly_timezone})
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -1447,6 +1463,7 @@ def update_automation_settings(
         int(bool(settings.weekly_report)),
         settings.weekly_report_day,
         settings.weekly_report_time,
+        settings.weekly_timezone,
         int(bool(settings.auto_sync_sheets)),
         int(bool(settings.auto_sync_drive)),
         int(bool(settings.auto_sync_tasks)),
@@ -1457,12 +1474,13 @@ def update_automation_settings(
     c.execute(
         """INSERT INTO user_settings
            (user_id, weekly_report, weekly_report_day, weekly_report_time,
-            auto_sync_sheets, auto_sync_drive, auto_sync_tasks, todo_google_sync)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            weekly_timezone, auto_sync_sheets, auto_sync_drive, auto_sync_tasks, todo_google_sync)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(user_id) DO UPDATE SET
              weekly_report=excluded.weekly_report,
              weekly_report_day=excluded.weekly_report_day,
              weekly_report_time=excluded.weekly_report_time,
+             weekly_timezone=excluded.weekly_timezone,
              auto_sync_sheets=excluded.auto_sync_sheets,
              auto_sync_drive=excluded.auto_sync_drive,
              auto_sync_tasks=excluded.auto_sync_tasks,
@@ -1475,6 +1493,7 @@ def update_automation_settings(
 
 
 def _weekly_automation_is_due(settings: dict, now: datetime) -> bool:
+    now = _weekly_local_time(settings, now)
     if now.weekday() != int(settings.get("weekly_report_day") or 0):
         return False
     hour, minute = _time_parts(settings.get("weekly_report_time"))
@@ -1498,8 +1517,9 @@ def _run_user_weekly_automation(
     record_run: bool = True,
     now: datetime = None,
 ) -> dict:
-    now = now or datetime.now()
+    now = now or datetime.now(timezone.utc)
     settings = _get_automation_settings(user_id)
+    local_now = _weekly_local_time(settings, now)
     selected = [
         key for key in ("weekly_report", "auto_sync_sheets", "auto_sync_drive", "auto_sync_tasks")
         if settings.get(key)
@@ -1542,7 +1562,7 @@ def _run_user_weekly_automation(
         c = conn.cursor()
         c.execute(
             "UPDATE user_settings SET weekly_automation_last_run = ? WHERE user_id = ?",
-            (now.strftime("%Y-%m-%d %H:%M"), user_id),
+            (local_now.strftime("%Y-%m-%d %H:%M"), user_id),
         )
         conn.commit()
         conn.close()
@@ -1582,7 +1602,7 @@ def _scheduler_loop():
             c.execute("SELECT * FROM user_settings WHERE daily_report = 1")
             rows = c.fetchall()
             conn.close()
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             today = now.strftime("%Y-%m-%d")
 
             for row in rows:
