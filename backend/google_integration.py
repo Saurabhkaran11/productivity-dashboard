@@ -26,6 +26,9 @@ IDENTITY_SCOPES = [
 GOOGLE_PRODUCTS = {
     "gmail": {
         "label": "Gmail",
+        "icon": "gmail",
+        "api_name": "Gmail API",
+        "category": "Email",
         "description": "Read your inbox and send dashboard reports.",
         "scopes": [
             "https://www.googleapis.com/auth/gmail.readonly",
@@ -34,11 +37,17 @@ GOOGLE_PRODUCTS = {
     },
     "calendar": {
         "label": "Google Calendar",
+        "icon": "calendar",
+        "api_name": "Google Calendar API",
+        "category": "Planning",
         "description": "View and add events from your productivity dashboard.",
         "scopes": ["https://www.googleapis.com/auth/calendar.events"],
     },
     "drive": {
         "label": "Google Drive",
+        "icon": "drive",
+        "api_name": "Google Drive API",
+        "category": "Files",
         "description": "Browse file metadata and save dashboard backups.",
         "scopes": [
             "https://www.googleapis.com/auth/drive.metadata.readonly",
@@ -47,6 +56,9 @@ GOOGLE_PRODUCTS = {
     },
     "sheets": {
         "label": "Google Sheets",
+        "icon": "sheets",
+        "api_name": "Google Sheets API",
+        "category": "Reports",
         "description": "Create and export productivity reports as spreadsheets.",
         "scopes": [
             "https://www.googleapis.com/auth/spreadsheets",
@@ -55,6 +67,9 @@ GOOGLE_PRODUCTS = {
     },
     "tasks": {
         "label": "Google Tasks",
+        "icon": "tasks",
+        "api_name": "Google Tasks API",
+        "category": "Tasks",
         "description": "See, add, and complete tasks without leaving MyLife.",
         "scopes": ["https://www.googleapis.com/auth/tasks"],
     },

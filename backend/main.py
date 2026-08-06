@@ -831,6 +831,9 @@ def google_products(user: dict = Depends(get_current_user)):
             {
                 "id": product_id,
                 "label": product["label"],
+                "icon": product.get("icon", product_id),
+                "api_name": product.get("api_name", "Google API"),
+                "category": product.get("category", "Google Workspace"),
                 "description": product["description"],
                 "enabled": product_id in enabled,
             }

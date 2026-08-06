@@ -1,25 +1,20 @@
 import React, { useCallback, useEffect, useState } from 'react'
 import {
-  CalendarDays, CheckCircle2, CheckSquare, Cloud, HardDrive, Loader2,
-  Mail, Table2, Unplug,
+  CheckCircle2, Cloud, Loader2, Unplug,
 } from 'lucide-react'
 import {
   connectGoogleProduct, disconnectGoogle, getGoogleProducts, removeGoogleProduct,
 } from '../utils/api'
-
-const ICONS = {
-  gmail: Mail,
-  calendar: CalendarDays,
-  drive: HardDrive,
-  sheets: Table2,
-  tasks: CheckSquare,
-}
+import { getGoogleProductIcon, GOOGLE_PRODUCT_ACCENTS } from '../constants/googleProducts'
 
 export default function GoogleConnectionManager({ onProductsChange }) {
   const [data, setData] = useState(null)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [pendingConnection, setPendingConnection] = useState(null)
+  const connectedCount = data?.products?.filter((product) => product.enabled).length || 0
+  const productCount = data?.products?.length || 0
 
   const load = useCallback(async () => {
     try {
@@ -43,12 +38,17 @@ export default function GoogleConnectionManager({ onProductsChange }) {
     setBusy(productId)
     setError('')
     setNotice('')
+    setPendingConnection(null)
     try {
       const response = await connectGoogleProduct(productId)
-      // Keep OAuth in the current tab. Popups can be blocked or detached from
-      // their opener, making a successful authorization look unsuccessful.
-      window.location.assign(response.data.url)
-      return
+      const product = data?.products?.find((item) => item.id === productId)
+      // A regular same-tab link is more dependable than a programmatic popup
+      // or redirect in browsers that suppress navigation after an async call.
+      setPendingConnection({
+        label: product?.label || 'Google tool',
+        url: response.data.url,
+      })
+      setNotice(`Ready to connect ${product?.label || 'your Google tool'}. Continue below to approve access.`)
     } catch (err) {
       setError(err.response?.data?.detail || 'Could not start the Google connection.')
     }
@@ -88,15 +88,18 @@ export default function GoogleConnectionManager({ onProductsChange }) {
       <div className="google-product-manager-heading">
         <div>
           <p className="section-eyebrow">Connected workspace</p>
-          <h2>Choose your Google tools</h2>
-          <p>Only the products you add can access your Google data.</p>
+          <h2>Your Google tool catalog</h2>
+          <p>Choose only the tools you want in your dashboard. You can remove any of them later.</p>
         </div>
-        {data?.google_account_linked && (
-          <button className="btn btn-outline" onClick={disconnect} disabled={busy === 'disconnect'}>
-            {busy === 'disconnect' ? <Loader2 size={16} className="spin" /> : <Unplug size={16} />}
-            Disconnect Google
-          </button>
-        )}
+        <div className="google-product-heading-actions">
+          {data && <span className="google-tool-count">{connectedCount} of {productCount} added</span>}
+          {data?.google_account_linked && (
+            <button className="btn btn-outline" onClick={disconnect} disabled={busy === 'disconnect'}>
+              {busy === 'disconnect' ? <Loader2 size={16} className="spin" /> : <Unplug size={16} />}
+              Disconnect Google
+            </button>
+          )}
+        </div>
       </div>
 
       {!data?.configured && (
@@ -107,17 +110,39 @@ export default function GoogleConnectionManager({ onProductsChange }) {
       )}
       {error && <div className="alert error">{error}</div>}
       {notice && <div className="alert success"><CheckCircle2 size={17} /> {notice}</div>}
+      {pendingConnection && (
+        <div className="google-connect-handoff">
+          <div>
+            <strong>Connect {pendingConnection.label}</strong>
+            <p>Approve only this tool’s requested access in Google.</p>
+          </div>
+          <div className="google-connect-handoff-actions">
+            <a className="btn btn-primary" href={pendingConnection.url}>Continue with Google</a>
+            <button className="btn btn-outline" onClick={() => setPendingConnection(null)}>Cancel</button>
+          </div>
+        </div>
+      )}
 
       <div className="google-product-grid">
         {(data?.products || []).map((product) => {
-          const Icon = ICONS[product.id] || Cloud
+          const Icon = getGoogleProductIcon(product)
           const isBusy = busy === product.id
+          const accent = GOOGLE_PRODUCT_ACCENTS[product.icon || product.id]
           return (
             <article className={`google-product-card ${product.enabled ? 'is-connected' : ''}`} key={product.id}>
-              <span className="google-product-icon"><Icon size={20} /></span>
+              <span className="google-product-icon" style={{ '--product-accent': accent }}><Icon size={20} /></span>
               <div className="google-product-copy">
-                <h3>{product.label}</h3>
+                <div className="google-product-title-row">
+                  <h3>{product.label}</h3>
+                  <span className={`google-product-state ${product.enabled ? 'is-added' : ''}`}>
+                    {product.enabled ? 'Added' : 'Optional'}
+                  </span>
+                </div>
                 <p>{product.description}</p>
+                <div className="google-product-meta">
+                  <span>{product.category}</span>
+                  <span>Requires {product.api_name}</span>
+                </div>
               </div>
               {product.enabled ? (
                 <button className="btn btn-outline" onClick={() => remove(product.id)} disabled={isBusy}>
@@ -127,7 +152,7 @@ export default function GoogleConnectionManager({ onProductsChange }) {
               ) : (
                 <button className="btn btn-primary" onClick={() => connect(product.id)} disabled={!data.configured || isBusy}>
                   {isBusy ? <Loader2 size={15} className="spin" /> : <Cloud size={15} />}
-                  Add
+                  Add tool
                 </button>
               )}
             </article>
