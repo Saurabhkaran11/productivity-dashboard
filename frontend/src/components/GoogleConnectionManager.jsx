@@ -45,8 +45,10 @@ export default function GoogleConnectionManager({ onProductsChange }) {
     setNotice('')
     try {
       const response = await connectGoogleProduct(productId)
-      window.open(response.data.url, '_blank', 'width=520,height=680')
-      setNotice('Finish approval in the Google window. This page will refresh when you return.')
+      // Keep OAuth in the current tab. Popups can be blocked or detached from
+      // their opener, making a successful authorization look unsuccessful.
+      window.location.assign(response.data.url)
+      return
     } catch (err) {
       setError(err.response?.data?.detail || 'Could not start the Google connection.')
     }
