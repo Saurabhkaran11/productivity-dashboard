@@ -1827,6 +1827,22 @@ body::before {
 .google-product-manager-heading p:not(.section-eyebrow) { color: var(--text-dim); font-size: 14px; margin: 0; }
 .section-eyebrow { color: var(--accent-soft); font-size: 11px; font-weight: 800; letter-spacing: .11em; margin: 0; text-transform: uppercase; }
 
+.google-connect-handoff {
+  align-items: center;
+  background: color-mix(in srgb, var(--accent), transparent 88%);
+  border: 1px solid color-mix(in srgb, var(--accent-soft), transparent 58%);
+  border-radius: 14px;
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+  margin: 14px 0;
+  padding: 14px 16px;
+}
+.google-connect-handoff strong { color: var(--text-strong); font-size: 14px; }
+.google-connect-handoff p { color: var(--text-dim); font-size: 12px; margin: 4px 0 0; }
+.google-connect-handoff-actions { display: flex; flex: 0 0 auto; gap: 8px; }
+.google-connect-handoff-actions .btn { align-items: center; display: inline-flex; text-decoration: none; }
+
 .google-product-grid {
   display: grid;
   gap: 12px;
@@ -1863,4 +1879,5 @@ body::before {
   .google-product-manager { padding: 18px; }
   .google-product-manager-heading { align-items: stretch; flex-direction: column; }
   .google-product-manager-heading > .btn { align-self: flex-start; }
+  .google-connect-handoff { align-items: flex-start; flex-direction: column; }
 }
