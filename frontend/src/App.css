@@ -1804,3 +1804,63 @@ body::before {
   .analytics-section .charts-grid { grid-auto-columns: minmax(280px, 86vw); }
   .analytics-section .chart-card { padding: 14px; }
 }
+
+/* Google Workspace product controls */
+.google-product-manager {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--surface), transparent 5%), color-mix(in srgb, var(--accent), transparent 94%));
+  border: 1px solid color-mix(in srgb, var(--accent-soft), transparent 78%);
+  border-radius: 18px;
+  box-shadow: var(--shadow-soft);
+  margin-bottom: 24px;
+  padding: 24px;
+}
+
+.google-product-manager-heading {
+  align-items: flex-start;
+  display: flex;
+  gap: 18px;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+
+.google-product-manager h2 { color: var(--text-strong); font-size: 22px; margin: 2px 0 6px; }
+.google-product-manager-heading p:not(.section-eyebrow) { color: var(--text-dim); font-size: 14px; margin: 0; }
+.section-eyebrow { color: var(--accent-soft); font-size: 11px; font-weight: 800; letter-spacing: .11em; margin: 0; text-transform: uppercase; }
+
+.google-product-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(245px, 1fr));
+}
+
+.google-product-card {
+  align-items: center;
+  background: color-mix(in srgb, var(--bg), var(--surface) 55%);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: auto minmax(0, 1fr);
+  padding: 15px;
+}
+
+.google-product-card.is-connected { border-color: color-mix(in srgb, #4ade80, transparent 52%); }
+.google-product-icon {
+  align-items: center;
+  background: color-mix(in srgb, var(--accent), transparent 84%);
+  border-radius: 11px;
+  color: var(--accent-soft);
+  display: flex;
+  height: 40px;
+  justify-content: center;
+  width: 40px;
+}
+.google-product-copy h3 { color: var(--text-strong); font-size: 15px; margin: 0 0 4px; }
+.google-product-copy p { color: var(--text-dim); font-size: 12px; line-height: 1.45; margin: 0; }
+.google-product-card .btn { grid-column: 2; justify-self: start; margin-top: 2px; padding: 7px 10px; }
+
+@media (max-width: 600px) {
+  .google-product-manager { padding: 18px; }
+  .google-product-manager-heading { align-items: stretch; flex-direction: column; }
+  .google-product-manager-heading > .btn { align-self: flex-start; }
+}

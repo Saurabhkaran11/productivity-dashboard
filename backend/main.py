@@ -1,5 +1,7 @@
 import threading
 import time
+import json
+import secrets
 from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
@@ -22,6 +24,7 @@ from models import (
     WorkLogCreate, WorkLogUpdate, WorkLogResponse,
     ScheduleCreate, ScheduleUpdate, ScheduleResponse,
     RegisterRequest, LoginRequest, EmailSettings,
+    GoogleTaskCreate, GoogleTaskUpdate, GoogleCalendarEventCreate,
 )
 import google_integration as gi
 from notify import send_smtp, send_smtp_test
@@ -111,6 +114,54 @@ def me(user: dict = Depends(get_current_user)):
     return public_user(user)
 
 
+OAUTH_STATE_TTL_SECONDS = 10 * 60
+
+
+def _enabled_google_products(user: dict) -> list:
+    try:
+        selected = json.loads(user.get("google_products") or "[]")
+    except (TypeError, json.JSONDecodeError):
+        selected = []
+    return [product_id for product_id in selected if product_id in gi.GOOGLE_PRODUCTS]
+
+
+def _create_oauth_state(purpose: str, user_id: int = None, product_id: str = None) -> str:
+    """Create a single-use, server-side OAuth state record to prevent callback CSRF."""
+    state = secrets.token_urlsafe(32)
+    now = int(time.time())
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("DELETE FROM oauth_states WHERE expires_at < ?", (now,))
+    c.execute(
+        "INSERT INTO oauth_states (state, user_id, purpose, product_id, expires_at) VALUES (?, ?, ?, ?, ?)",
+        (state, user_id, purpose, product_id, now + OAUTH_STATE_TTL_SECONDS),
+    )
+    conn.commit()
+    conn.close()
+    return state
+
+
+def _consume_oauth_state(state: str) -> dict:
+    if not state:
+        raise HTTPException(400, "Missing OAuth state. Start the Google connection again.")
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM oauth_states WHERE state = ?", (state,))
+    row = c.fetchone()
+    c.execute("DELETE FROM oauth_states WHERE state = ?", (state,))
+    conn.commit()
+    conn.close()
+    if not row or row["expires_at"] < int(time.time()):
+        raise HTTPException(400, "This Google connection link expired. Please try again.")
+    return dict(row)
+
+
+def _require_google_product(user: dict, product_id: str):
+    if product_id not in _enabled_google_products(user):
+        label = gi.GOOGLE_PRODUCTS.get(product_id, {}).get("label", product_id.title())
+        raise HTTPException(403, f"Enable {label} in My Google before using it.")
+
+
 @app.get("/auth/google/url")
 def google_auth_url(_=Depends(rate_limit(limit=30, window=60))):
     if not gi.google_configured():
@@ -119,11 +170,12 @@ def google_auth_url(_=Depends(rate_limit(limit=30, window=60))):
             "Google is not configured yet. Add GOOGLE_CLIENT_ID and "
             "GOOGLE_CLIENT_SECRET to the backend environment.",
         )
-    return {"url": gi.build_auth_url()}
+    return {"url": gi.build_auth_url(gi.IDENTITY_SCOPES, _create_oauth_state("sign_in"))}
 
 
 @app.get("/auth/google/callback")
-def google_callback(code: str, error: str = None, _=Depends(rate_limit(limit=10, window=60))):
+def google_callback(code: str = "", state: str = "", error: str = None, _=Depends(rate_limit(limit=10, window=60))):
+    oauth_state = _consume_oauth_state(state)
     if error:
         raise HTTPException(400, f"Google auth failed: {error}")
     if not gi.google_configured():
@@ -148,35 +200,63 @@ def google_callback(code: str, error: str = None, _=Depends(rate_limit(limit=10,
     conn = get_db()
     c = conn.cursor()
 
+    if oauth_state["purpose"] == "connect_product":
+        product_id = oauth_state.get("product_id")
+        user_id = oauth_state.get("user_id")
+        if product_id not in gi.GOOGLE_PRODUCTS or not user_id:
+            conn.close()
+            raise HTTPException(400, "Invalid Google product connection.")
+        c.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+        user = c.fetchone()
+        if not user:
+            conn.close()
+            raise HTTPException(401, "Your MyLife session is no longer available. Please sign in again.")
+        user = dict(user)
+        if user.get("google_sub") and user["google_sub"] != sub:
+            conn.close()
+            raise HTTPException(409, "Connect products using the same Google account already linked to MyLife.")
+        c.execute("SELECT id FROM users WHERE google_sub = ? AND id != ?", (sub, user_id))
+        if c.fetchone():
+            conn.close()
+            raise HTTPException(409, "This Google account is already linked to another MyLife account.")
+
+        products = sorted(set(_enabled_google_products(user) + [product_id]))
+        refresh_token = tokens.get("refresh_token") or user.get("google_refresh_token")
+        scopes = tokens.get("scope") or user.get("google_scopes") or ""
+        c.execute(
+            "UPDATE users SET google_sub=?, google_access_token=?, google_refresh_token=?, google_email=?, google_scopes=?, google_products=? WHERE id=?",
+            (sub, tokens.get("access_token"), refresh_token, gmail, scopes, json.dumps(products), user_id),
+        )
+        conn.commit()
+        conn.close()
+        redirect = f"{gi.FRONTEND_URL.rstrip('/')}/?google_connected=1&google_product={product_id}"
+        return RedirectResponse(url=redirect, status_code=303)
+
+    if oauth_state["purpose"] != "sign_in":
+        conn.close()
+        raise HTTPException(400, "Invalid Google OAuth request.")
+
+    # Sign-in receives identity-only permissions. Workspace tokens are stored
+    # only after a user explicitly enables a product from My Google.
     c.execute("SELECT * FROM users WHERE google_sub = ?", (sub,))
     user = c.fetchone()
-
     if not user:
         c.execute("SELECT * FROM users WHERE email = ?", (gmail,))
         user = c.fetchone()
         if user:
-            c.execute(
-                "UPDATE users SET google_sub=?, google_access_token=?, google_refresh_token=?, google_email=? WHERE id=?",
-                (sub, tokens.get("access_token"), tokens.get("refresh_token"), gmail, user["id"]),
-            )
+            c.execute("UPDATE users SET google_sub=?, google_email=? WHERE id=?", (sub, gmail, user["id"]))
         else:
             c.execute(
-                "INSERT INTO users (name, email, google_sub, google_access_token, google_refresh_token, google_email) VALUES (?, ?, ?, ?, ?, ?)",
-                (name, gmail, sub, tokens.get("access_token"), tokens.get("refresh_token"), gmail),
+                "INSERT INTO users (name, email, google_sub, google_email) VALUES (?, ?, ?, ?)",
+                (name, gmail, sub, gmail),
             )
     else:
-        c.execute(
-            "UPDATE users SET google_access_token=?, google_refresh_token=?, google_email=? WHERE id=?",
-            (tokens.get("access_token"), tokens.get("refresh_token"), gmail, user["id"]),
-        )
+        c.execute("UPDATE users SET google_email=? WHERE id=?", (gmail, user["id"]))
 
     conn.commit()
     c.execute("SELECT * FROM users WHERE google_sub = ?", (sub,))
     user = dict(c.fetchone())
     conn.close()
-
-    # Redirect back to the frontend so its auth provider can persist the
-    # session.  The former success page never delivered the token to the app.
     redirect = f"{gi.FRONTEND_URL.rstrip('/')}/login?google_token={create_token(user['id'])}"
     return RedirectResponse(url=redirect, status_code=303)
 
@@ -733,9 +813,89 @@ def export_pdf(
 def sync_status(user: dict = Depends(get_current_user)):
     return {
         "google_connected": bool(user.get("google_access_token") or user.get("google_refresh_token")),
+        "google_account_linked": bool(user.get("google_sub")),
         "google_email": user.get("google_email"),
         "google_configured_server": gi.google_configured(),
+        "products": _enabled_google_products(user),
     }
+
+
+@app.get("/google/products")
+def google_products(user: dict = Depends(get_current_user)):
+    enabled = set(_enabled_google_products(user))
+    return {
+        "google_account_linked": bool(user.get("google_sub")),
+        "google_email": user.get("google_email"),
+        "configured": gi.google_configured(),
+        "products": [
+            {
+                "id": product_id,
+                "label": product["label"],
+                "description": product["description"],
+                "enabled": product_id in enabled,
+            }
+            for product_id, product in gi.GOOGLE_PRODUCTS.items()
+        ],
+    }
+
+
+@app.post("/google/products/{product_id}/connect")
+def connect_google_product(product_id: str, user: dict = Depends(get_current_user), _=Depends(rate_limit(limit=20, window=60))):
+    if not gi.google_configured():
+        raise HTTPException(400, "Google is not configured on the server. Add GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET.")
+    product = gi.GOOGLE_PRODUCTS.get(product_id)
+    if not product:
+        raise HTTPException(404, "Unknown Google product.")
+    state = _create_oauth_state("connect_product", user["id"], product_id)
+    return {"url": gi.build_auth_url(gi.IDENTITY_SCOPES + product["scopes"], state)}
+
+
+@app.delete("/google/products/{product_id}")
+def remove_google_product(product_id: str, user: dict = Depends(get_current_user)):
+    enabled = _enabled_google_products(user)
+    if product_id not in enabled:
+        raise HTTPException(404, "That Google product is not connected.")
+    remaining = [item for item in enabled if item != product_id]
+    revoke_token = None
+    conn = get_db()
+    c = conn.cursor()
+    if remaining:
+        c.execute("UPDATE users SET google_products=? WHERE id=?", (json.dumps(remaining), user["id"]))
+    else:
+        # Once no Workspace product remains, discard credentials locally and
+        # revoke the grant. The Google identity link is retained for sign-in.
+        revoke_token = user.get("google_refresh_token") or user.get("google_access_token")
+        c.execute(
+            "UPDATE users SET google_access_token=NULL, google_refresh_token=NULL, google_scopes='', google_products='[]' WHERE id=?",
+            (user["id"],),
+        )
+    conn.commit()
+    conn.close()
+    if revoke_token:
+        try:
+            gi.revoke_token(revoke_token)
+        except Exception:
+            pass
+    return {"status": "ok", "products": remaining}
+
+
+@app.post("/google/disconnect")
+def disconnect_google(user: dict = Depends(get_current_user)):
+    revoke_token = user.get("google_refresh_token") or user.get("google_access_token")
+    conn = get_db()
+    c = conn.cursor()
+    c.execute(
+        "UPDATE users SET google_sub=NULL, google_access_token=NULL, google_refresh_token=NULL, google_email=NULL, google_scopes='', google_products='[]' WHERE id=?",
+        (user["id"],),
+    )
+    conn.commit()
+    conn.close()
+    if revoke_token:
+        try:
+            gi.revoke_token(revoke_token)
+        except Exception:
+            pass
+    return {"status": "ok"}
 
 
 @app.post("/sync/sheets")
@@ -746,6 +906,7 @@ def sync_sheets(
 ):
     if not gi.google_configured():
         raise HTTPException(400, "Google is not configured on the server. Add GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET.")
+    _require_google_product(user, "sheets")
     try:
         access = gi._authed_access(user)
     except Exception as e:
@@ -790,6 +951,7 @@ def sync_sheets(
 def sync_drive(period: str = "monthly", user: dict = Depends(get_current_user)):
     if not gi.google_configured():
         raise HTTPException(400, "Google is not configured on the server.")
+    _require_google_product(user, "drive")
     try:
         access = gi._authed_access(user)
     except Exception as e:
@@ -849,6 +1011,7 @@ def _google_error(e):
 @app.get("/google/gmail/list")
 def google_gmail_list(q: str = "", max: int = Query(20, ge=1, le=50), user: dict = Depends(get_current_user), _=Depends(rate_limit(limit=60, window=60))):
     _require_google_configured()
+    _require_google_product(user, "gmail")
     try:
         data, access = gi.list_gmail_messages(user, max, q)
         _persist_google_token(user, access)
@@ -862,6 +1025,7 @@ def google_gmail_list(q: str = "", max: int = Query(20, ge=1, le=50), user: dict
 @app.get("/google/gmail/read/{message_id}")
 def google_gmail_read(message_id: str, user: dict = Depends(get_current_user), _=Depends(rate_limit(limit=60, window=60))):
     _require_google_configured()
+    _require_google_product(user, "gmail")
     try:
         data, access = gi.read_gmail_message(user, message_id)
         _persist_google_token(user, access)
@@ -875,6 +1039,7 @@ def google_gmail_read(message_id: str, user: dict = Depends(get_current_user), _
 @app.get("/google/drive/list")
 def google_drive_list(q: str = "", max: int = Query(100, ge=1, le=1000), user: dict = Depends(get_current_user), _=Depends(rate_limit(limit=60, window=60))):
     _require_google_configured()
+    _require_google_product(user, "drive")
     try:
         files, access = gi.list_drive_files(user, q, max)
         _persist_google_token(user, access)
@@ -888,6 +1053,7 @@ def google_drive_list(q: str = "", max: int = Query(100, ge=1, le=1000), user: d
 @app.get("/google/sheets/list")
 def google_sheets_list(max: int = Query(100, ge=1, le=1000), user: dict = Depends(get_current_user), _=Depends(rate_limit(limit=60, window=60))):
     _require_google_configured()
+    _require_google_product(user, "sheets")
     try:
         files, access = gi.list_google_sheets(user, max)
         _persist_google_token(user, access)
@@ -901,10 +1067,69 @@ def google_sheets_list(max: int = Query(100, ge=1, le=1000), user: dict = Depend
 @app.get("/google/calendar/list")
 def google_calendar_list(max: int = Query(20, ge=1, le=100), user: dict = Depends(get_current_user), _=Depends(rate_limit(limit=60, window=60))):
     _require_google_configured()
+    _require_google_product(user, "calendar")
     try:
         events, access = gi.list_calendar_events(user, max)
         _persist_google_token(user, access)
         return {"events": events}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        _google_error(e)
+
+
+@app.post("/google/calendar/events")
+def google_calendar_create(item: GoogleCalendarEventCreate, user: dict = Depends(get_current_user)):
+    _require_google_configured()
+    _require_google_product(user, "calendar")
+    try:
+        event, access = gi.create_calendar_event(user, item.title, item.start, item.end, item.description or "")
+        _persist_google_token(user, access)
+        return event
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        _google_error(e)
+
+
+@app.get("/google/tasks")
+def google_tasks_list(max: int = Query(100, ge=1, le=100), user: dict = Depends(get_current_user), _=Depends(rate_limit(limit=60, window=60))):
+    _require_google_configured()
+    _require_google_product(user, "tasks")
+    try:
+        tasks, access = gi.list_google_tasks(user, max)
+        _persist_google_token(user, access)
+        return {"tasks": tasks}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        _google_error(e)
+
+
+@app.post("/google/tasks")
+def google_tasks_create(item: GoogleTaskCreate, user: dict = Depends(get_current_user)):
+    _require_google_configured()
+    _require_google_product(user, "tasks")
+    if not item.title.strip():
+        raise HTTPException(400, "Task title is required.")
+    try:
+        task, access = gi.create_google_task(user, item.title.strip(), item.notes or "", item.due)
+        _persist_google_token(user, access)
+        return task
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        _google_error(e)
+
+
+@app.patch("/google/tasks/{task_list_id}/{task_id}")
+def google_tasks_update(task_list_id: str, task_id: str, item: GoogleTaskUpdate, user: dict = Depends(get_current_user)):
+    _require_google_configured()
+    _require_google_product(user, "tasks")
+    try:
+        task, access = gi.complete_google_task(user, task_list_id, task_id, item.completed)
+        _persist_google_token(user, access)
+        return task
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
@@ -926,7 +1151,7 @@ def notify_report(period: str = "daily", user: dict = Depends(get_current_user))
     attachment = (f"mylife_{period}_{today.strftime('%Y-%m-%d')}.xlsx", excel_bytes,
                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-    if user.get("google_access_token") or user.get("google_refresh_token"):
+    if "gmail" in _enabled_google_products(user):
         try:
             access = gi._authed_access(user)
             gi.send_gmail(access, to, subject, body_html, attachment)
@@ -952,7 +1177,7 @@ def notify_report(period: str = "daily", user: dict = Depends(get_current_user))
 @app.post("/notify/test")
 def notify_test(user: dict = Depends(get_current_user)):
     to = user.get("google_email") or user.get("email")
-    if user.get("google_access_token") or user.get("google_refresh_token"):
+    if "gmail" in _enabled_google_products(user):
         try:
             access = gi._authed_access(user)
             gi.send_gmail(
@@ -1060,7 +1285,7 @@ def _send_daily_report(user_id: int):
     to = user.get("google_email") or user.get("email")
 
     try:
-        if user.get("google_access_token") or user.get("google_refresh_token"):
+        if "gmail" in _enabled_google_products(user):
             access = gi._authed_access(user)
             gi.send_gmail(access, to, subject, body_html, attachment)
         else:
