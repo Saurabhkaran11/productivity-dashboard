@@ -325,15 +325,15 @@ def _message_headers(message: dict) -> dict:
     return {h["name"]: h["value"] for h in payload.get("headers", []) if h.get("name") and h.get("value")}
 
 
-def list_gmail_messages(user: dict, max_results: int = 25, query: str = "") -> list:
+def list_gmail_messages(user: dict, max_results: int = 25, query: str = "") -> tuple:
     params = {"maxResults": min(max_results, 50)}
     if query:
         params["q"] = query
-    data, _ = authed_get(user, "https://gmail.googleapis.com/gmail/v1/users/me/messages", params=params)
+    data, access = authed_get(user, "https://gmail.googleapis.com/gmail/v1/users/me/messages", params=params)
 
     out = []
     for msg in data.get("messages", []):
-        meta, _ = authed_get(
+        meta, access = authed_get(
             user,
             f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg['id']}",
             params={"format": "metadata", "metadataHeaders": "From,Subject,Date"},
@@ -347,11 +347,11 @@ def list_gmail_messages(user: dict, max_results: int = 25, query: str = "") -> l
             "snippet": meta.get("snippet", ""),
             "unread": "UNREAD" in meta.get("labelIds", []),
         })
-    return out
+    return out, access
 
 
-def read_gmail_message(user: dict, message_id: str) -> dict:
-    data, _ = authed_get(
+def read_gmail_message(user: dict, message_id: str) -> tuple:
+    data, access = authed_get(
         user,
         f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}",
         params={"format": "full"},
@@ -366,31 +366,31 @@ def read_gmail_message(user: dict, message_id: str) -> dict:
         "labels": data.get("labelIds", []),
         "unread": "UNREAD" in data.get("labelIds", []),
         "body": _message_text(data.get("payload", {})),
-    }
+    }, access
 
 
 # ---------- Google Drive ----------
 
-def list_drive_files(user: dict, query: str = "", max_results: int = 100) -> list:
+def list_drive_files(user: dict, query: str = "", max_results: int = 100) -> tuple:
     params = {
         "pageSize": min(max_results, 1000),
         "fields": "files(id,name,mimeType,modifiedTime,size,webViewLink,iconLink)",
     }
     if query:
         params["q"] = query
-    data, _ = authed_get(user, "https://www.googleapis.com/drive/v3/files", params=params)
-    return data.get("files", [])
+    data, access = authed_get(user, "https://www.googleapis.com/drive/v3/files", params=params)
+    return data.get("files", []), access
 
 
 # ---------- Google Sheets (list via Drive API) ----------
 
-def list_google_sheets(user: dict, max_results: int = 100) -> list:
+def list_google_sheets(user: dict, max_results: int = 100) -> tuple:
     return list_drive_files(user, "mimeType='application/vnd.google-apps.spreadsheet'", max_results)
 
 
 # ---------- Google Calendar ----------
 
-def list_calendar_events(user: dict, max_results: int = 20) -> list:
+def list_calendar_events(user: dict, max_results: int = 20) -> tuple:
     from datetime import datetime
 
     now = datetime.now().astimezone().isoformat()
@@ -402,8 +402,8 @@ def list_calendar_events(user: dict, max_results: int = 20) -> list:
         "timeMin": now,
         "fields": "items(id,summary,start,end,location,description,status)",
     }
-    data, _ = authed_get(user, "https://www.googleapis.com/calendar/v3/calendars/primary/events", params=params)
-    return data.get("items", [])
+    data, access = authed_get(user, "https://www.googleapis.com/calendar/v3/calendars/primary/events", params=params)
+    return data.get("items", []), access
 
 
 def create_calendar_event(user: dict, title: str, start: str, end: str, description: str = "") -> tuple:
