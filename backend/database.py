@@ -1,5 +1,8 @@
 import os
 
+import psycopg
+from psycopg.rows import dict_row
+
 DB_PATH = os.environ.get("MYLIFE_DB", os.path.join(os.path.dirname(__file__), "data.db"))
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
@@ -16,6 +19,8 @@ SQLITE_SCHEMAS = [
         google_access_token TEXT,
         google_refresh_token TEXT,
         google_email TEXT,
+        google_scopes TEXT DEFAULT '',
+        google_products TEXT DEFAULT '[]',
         created_at TEXT DEFAULT (datetime('now'))
     )
     """,
@@ -30,6 +35,17 @@ SQLITE_SCHEMAS = [
         report_time TEXT DEFAULT '18:00',
         report_last_sent TEXT,
         recipient TEXT,
+        FOREIGN KEY(user_id) REFERENCES users(id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS oauth_states (
+        state TEXT PRIMARY KEY,
+        user_id INTEGER,
+        purpose TEXT NOT NULL,
+        product_id TEXT,
+        expires_at INTEGER NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
         FOREIGN KEY(user_id) REFERENCES users(id)
     )
     """,
@@ -86,9 +102,90 @@ SQLITE_SCHEMAS = [
 PG_TYPE = "postgresql" if DATABASE_URL and DATABASE_URL.startswith(("postgresql://", "postgres://")) else "sqlite"
 
 
+class _HybridRow(dict):
+    """A mapping row that also supports SQLite's positional row access."""
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return tuple(self.values())[key]
+        return super().__getitem__(key)
+
+
+class _PostgresCursor:
+    """Small compatibility layer for the existing SQLite-oriented queries.
+
+    The API was written with ``?`` parameter placeholders and ``lastrowid``.
+    psycopg uses ``%s`` and exposes inserted ids differently, so translating at
+    the database edge keeps both supported production backends consistent.
+    """
+
+    def __init__(self, cursor, connection):
+        self._cursor = cursor
+        self._connection = connection
+
+    @property
+    def connection(self):
+        return self._connection
+
+    @property
+    def rowcount(self):
+        return self._cursor.rowcount
+
+    @property
+    def lastrowid(self):
+        self._cursor.execute("SELECT LASTVAL() AS id")
+        row = self._cursor.fetchone()
+        return row["id"]
+
+    def execute(self, query, params=None):
+        query = query.replace("?", "%s")
+        self._cursor.execute(query, params)
+        return self
+
+    def fetchone(self):
+        row = self._cursor.fetchone()
+        return _HybridRow(row) if row is not None else None
+
+    def fetchall(self):
+        return [_HybridRow(row) for row in self._cursor.fetchall()]
+
+    def __enter__(self):
+        self._cursor.__enter__()
+        return self
+
+    def __exit__(self, *args):
+        return self._cursor.__exit__(*args)
+
+    def __getattr__(self, name):
+        return getattr(self._cursor, name)
+
+
+class _PostgresConnection:
+    def __init__(self, connection):
+        self._connection = connection
+
+    def cursor(self, *args, **kwargs):
+        return _PostgresCursor(self._connection.cursor(*args, **kwargs), self)
+
+    def commit(self):
+        return self._connection.commit()
+
+    def close(self):
+        return self._connection.close()
+
+    def __enter__(self):
+        self._connection.__enter__()
+        return self
+
+    def __exit__(self, *args):
+        return self._connection.__exit__(*args)
+
+
 def _pg_conn():
-    # psycopg 3 connects to either scheme natively.
-    return psycopg.connect(DATABASE_URL)
+    # psycopg 3 connects to either scheme natively. Dict rows retain the
+    # response shape used by SQLite, and the wrapper normalises the few
+    # DB-API differences used throughout the API.
+    return _PostgresConnection(psycopg.connect(DATABASE_URL, row_factory=dict_row))
 
 
 def _pg_is_table(c, table):
@@ -109,7 +206,7 @@ def _pg_has_column(c, table, col):
 
 def _pg_init(c):
     for table, ddl in zip(
-        ["users", "user_settings", "spending", "todos", "work_log", "schedule"],
+        ["users", "user_settings", "oauth_states", "spending", "todos", "work_log", "schedule"],
         [
             """
             CREATE TABLE IF NOT EXISTS users (
@@ -121,6 +218,8 @@ def _pg_init(c):
                 google_access_token TEXT,
                 google_refresh_token TEXT,
                 google_email TEXT,
+                google_scopes TEXT DEFAULT '',
+                google_products TEXT DEFAULT '[]',
                 created_at TEXT DEFAULT (now()::text)
             )
             """,
@@ -135,6 +234,16 @@ def _pg_init(c):
                 report_time TEXT DEFAULT '18:00',
                 report_last_sent TEXT,
                 recipient TEXT
+            )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS oauth_states (
+                state TEXT PRIMARY KEY,
+                user_id INTEGER,
+                purpose TEXT NOT NULL,
+                product_id TEXT,
+                expires_at BIGINT NOT NULL,
+                created_at TEXT DEFAULT (now()::text)
             )
             """,
             """
@@ -195,6 +304,10 @@ def _pg_init(c):
             c.execute(f"ALTER TABLE {table} ADD COLUMN user_id INTEGER")
     if not _pg_has_column(c, "user_settings", "recipient"):
         c.execute("ALTER TABLE user_settings ADD COLUMN recipient TEXT")
+    if not _pg_has_column(c, "users", "google_scopes"):
+        c.execute("ALTER TABLE users ADD COLUMN google_scopes TEXT DEFAULT ''")
+    if not _pg_has_column(c, "users", "google_products"):
+        c.execute("ALTER TABLE users ADD COLUMN google_products TEXT DEFAULT '[]'")
     c.connection.commit()
 
 
@@ -238,6 +351,11 @@ def init_db():
     cols = [r[1] for r in c.execute("PRAGMA table_info(user_settings)").fetchall()]
     if "recipient" not in cols:
         c.execute("ALTER TABLE user_settings ADD COLUMN recipient TEXT")
+    user_cols = [r[1] for r in c.execute("PRAGMA table_info(users)").fetchall()]
+    if "google_scopes" not in user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN google_scopes TEXT DEFAULT ''")
+    if "google_products" not in user_cols:
+        c.execute("ALTER TABLE users ADD COLUMN google_products TEXT DEFAULT '[]'")
     conn.commit()
     conn.close()
 

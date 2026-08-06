@@ -5,6 +5,8 @@ import {
 } from 'recharts'
 import { getSchedule, addSchedule, deleteSchedule } from '../utils/api'
 import Collapsible from './Collapsible'
+import QuickEntry from './QuickEntry'
+import { parseQuickSchedule } from '../utils/quickCapture'
 
 const UTIL_COLORS = ['#38bdf8', '#fbbf24', '#4ade80', '#a78bfa', '#f87171', '#22d3ee', '#fb923c', '#e879f9']
 
@@ -15,7 +17,7 @@ function hoursBetween(start, end) {
   return mins > 0 ? mins / 60 : 0
 }
 
-export default function Schedule() {
+export default function Schedule({ refreshKey = 0 }) {
   const [schedule, setSchedule] = useState([])
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0])
   const [loading, setLoading] = useState(true)
@@ -30,7 +32,7 @@ export default function Schedule() {
 
   useEffect(() => {
     loadData()
-  }, [selectedDate])
+  }, [selectedDate, refreshKey])
 
   async function loadData() {
     setLoading(true)
@@ -80,6 +82,14 @@ export default function Schedule() {
     }
   }
 
+  async function handleQuickEntry(input) {
+    const event = parseQuickSchedule(input)
+    await addSchedule(event)
+    setSelectedDate(event.date)
+    await loadData()
+    return `Event saved for ${event.start_time}`
+  }
+
   const eventsCount = schedule.length
   const recurringCount = schedule.filter((s) => s.recurring).length
 
@@ -102,6 +112,13 @@ export default function Schedule() {
     <div>
       <h1 className="page-title">Daily Schedule</h1>
 
+      <QuickEntry
+        label="Quick event"
+        placeholder="Quick event — Team sync at 2pm tomorrow…"
+        hint="Press Enter to save. Events default to one hour; use “at 2pm” to choose the time."
+        onSubmit={handleQuickEntry}
+      />
+
       <div className="card-grid">
         <div className="card">
           <h3>Events for Date</h3>
@@ -117,7 +134,7 @@ export default function Schedule() {
         </div>
       </div>
 
-      <Collapsible title="Charts & Analytics" count="2 charts">
+      <Collapsible title="Insights & analysis" count="2 charts" defaultOpen={false} className="analytics-section">
       <div className="charts-grid">
         <div className="chart-card">
           <h3>Time Utilization by Activity</h3>
@@ -171,68 +188,40 @@ export default function Schedule() {
       </Collapsible>
 
       <div className="form-card">
-        <h3>Add Event</h3>
-        <form onSubmit={handleSubmit}>
-          <div className="form-row">
-            <div className="form-group" style={{ flex: 2 }}>
-              <label>Title</label>
-              <input
-                type="text"
-                value={form.title}
-                onChange={(e) => setForm({ ...form, title: e.target.value })}
-                required
-                placeholder="Team standup"
-              />
+        <details className="details-entry">
+          <summary>Need more detail? Open the full event form</summary>
+          <form onSubmit={handleSubmit} className="details-entry-form">
+            <div className="form-row">
+              <div className="form-group" style={{ flex: 2 }}>
+                <label>Title</label>
+                <input type="text" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required placeholder="Team standup" />
+              </div>
+              <div className="form-group">
+                <label>Date</label>
+                <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} required />
+              </div>
+              <div className="form-group">
+                <label>Start</label>
+                <input type="time" value={form.start_time} onChange={(e) => setForm({ ...form, start_time: e.target.value })} required />
+              </div>
+              <div className="form-group">
+                <label>End</label>
+                <input type="time" value={form.end_time} onChange={(e) => setForm({ ...form, end_time: e.target.value })} required />
+              </div>
+              <div className="form-group">
+                <label>Recurring</label>
+                <select value={form.recurring} onChange={(e) => setForm({ ...form, recurring: e.target.value === 'true' })}>
+                  <option value="false">No</option><option value="true">Yes</option>
+                </select>
+              </div>
+              <button type="submit" className="btn btn-primary">Save event</button>
             </div>
-            <div className="form-group">
-              <label>Date</label>
-              <input
-                type="date"
-                value={form.date}
-                onChange={(e) => setForm({ ...form, date: e.target.value })}
-                required
-              />
+            <div className="form-group" style={{ marginTop: 8 }}>
+              <label>Notes</label>
+              <input type="text" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Optional notes..." />
             </div>
-            <div className="form-group">
-              <label>Start</label>
-              <input
-                type="time"
-                value={form.start_time}
-                onChange={(e) => setForm({ ...form, start_time: e.target.value })}
-                required
-              />
-            </div>
-            <div className="form-group">
-              <label>End</label>
-              <input
-                type="time"
-                value={form.end_time}
-                onChange={(e) => setForm({ ...form, end_time: e.target.value })}
-                required
-              />
-            </div>
-            <div className="form-group">
-              <label>Recurring</label>
-              <select
-                value={form.recurring}
-                onChange={(e) => setForm({ ...form, recurring: e.target.value === 'true' })}
-              >
-                <option value="false">No</option>
-                <option value="true">Yes</option>
-              </select>
-            </div>
-            <button type="submit" className="btn btn-primary">Add</button>
-          </div>
-          <div className="form-group" style={{ marginTop: 8 }}>
-            <label>Notes</label>
-            <input
-              type="text"
-              value={form.notes}
-              onChange={(e) => setForm({ ...form, notes: e.target.value })}
-              placeholder="Optional notes..."
-            />
-          </div>
-        </form>
+          </form>
+        </details>
       </div>
 
       <div className="form-card">

@@ -5,10 +5,12 @@ import {
 } from 'recharts'
 import { getWorkLog, addWorkLog, deleteWorkLog } from '../utils/api'
 import Collapsible from './Collapsible'
+import QuickEntry from './QuickEntry'
+import { parseQuickWork } from '../utils/quickCapture'
 
 const COLORS = ['#38bdf8', '#fbbf24', '#4ade80', '#a78bfa', '#f87171', '#22d3ee']
 
-export default function WorkTracker() {
+export default function WorkTracker({ refreshKey = 0 }) {
   const [logs, setLogs] = useState([])
   const [loading, setLoading] = useState(true)
   const [form, setForm] = useState({
@@ -21,7 +23,7 @@ export default function WorkTracker() {
 
   useEffect(() => {
     loadData()
-  }, [])
+  }, [refreshKey])
 
   async function loadData() {
     setLoading(true)
@@ -62,6 +64,12 @@ export default function WorkTracker() {
     }
   }
 
+  async function handleQuickEntry(input) {
+    await addWorkLog(parseQuickWork(input))
+    await loadData()
+    return 'Work log saved'
+  }
+
   const totalHours = logs.reduce((s, l) => s + l.hours, 0)
 
   const hoursByDate = logs
@@ -85,6 +93,13 @@ export default function WorkTracker() {
     <div>
       <h1 className="page-title">Work Tracker</h1>
 
+      <QuickEntry
+        label="Quick work log"
+        placeholder="Quick work log — 1.5h design review…"
+        hint="Press Enter to save. Start with the duration, then what you worked on."
+        onSubmit={handleQuickEntry}
+      />
+
       <div className="card-grid">
         <div className="card">
           <h3>Total Hours</h3>
@@ -101,65 +116,37 @@ export default function WorkTracker() {
       </div>
 
       <div className="form-card">
-        <h3>Log Work</h3>
-        <form onSubmit={handleSubmit}>
-          <div className="form-row">
-            <div className="form-group" style={{ flex: 2 }}>
-              <label>Task</label>
-              <input
-                type="text"
-                value={form.task}
-                onChange={(e) => setForm({ ...form, task: e.target.value })}
-                required
-                placeholder="Worked on AI feature"
-              />
+        <details className="details-entry">
+          <summary>Need more detail? Open the full work form</summary>
+          <form onSubmit={handleSubmit} className="details-entry-form">
+            <div className="form-row">
+              <div className="form-group" style={{ flex: 2 }}>
+                <label>Task</label>
+                <input type="text" value={form.task} onChange={(e) => setForm({ ...form, task: e.target.value })} required placeholder="Worked on AI feature" />
+              </div>
+              <div className="form-group">
+                <label>Project</label>
+                <input type="text" value={form.project} onChange={(e) => setForm({ ...form, project: e.target.value })} placeholder="AI Projects" />
+              </div>
+              <div className="form-group">
+                <label>Hours</label>
+                <input type="number" step="0.5" min="0" max="24" value={form.hours} onChange={(e) => setForm({ ...form, hours: e.target.value })} required placeholder="2.5" />
+              </div>
+              <div className="form-group">
+                <label>Date</label>
+                <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} required />
+              </div>
+              <button type="submit" className="btn btn-primary">Save work log</button>
             </div>
-            <div className="form-group">
-              <label>Project</label>
-              <input
-                type="text"
-                value={form.project}
-                onChange={(e) => setForm({ ...form, project: e.target.value })}
-                placeholder="AI Projects"
-              />
+            <div className="form-group" style={{ marginTop: 8 }}>
+              <label>Notes</label>
+              <input type="text" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="What did you accomplish?" />
             </div>
-            <div className="form-group">
-              <label>Hours</label>
-              <input
-                type="number"
-                step="0.5"
-                min="0"
-                max="24"
-                value={form.hours}
-                onChange={(e) => setForm({ ...form, hours: e.target.value })}
-                required
-                placeholder="2.5"
-              />
-            </div>
-            <div className="form-group">
-              <label>Date</label>
-              <input
-                type="date"
-                value={form.date}
-                onChange={(e) => setForm({ ...form, date: e.target.value })}
-                required
-              />
-            </div>
-            <button type="submit" className="btn btn-primary">Log</button>
-          </div>
-          <div className="form-group" style={{ marginTop: 8 }}>
-            <label>Notes</label>
-            <input
-              type="text"
-              value={form.notes}
-              onChange={(e) => setForm({ ...form, notes: e.target.value })}
-              placeholder="What did you accomplish?"
-            />
-          </div>
-        </form>
+          </form>
+        </details>
       </div>
 
-      <Collapsible title="Charts & Analytics" count="3 charts">
+      <Collapsible title="Insights & analysis" count="3 charts" defaultOpen={false} className="analytics-section">
       <div className="charts-grid">
         <div className="chart-card">
           <h3>Hours by Date</h3>

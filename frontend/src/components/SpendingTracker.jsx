@@ -5,6 +5,8 @@ import {
 } from 'recharts'
 import { getSpending, addSpending, deleteSpending } from '../utils/api'
 import Collapsible from './Collapsible'
+import QuickEntry from './QuickEntry'
+import { parseQuickSpending } from '../utils/quickCapture'
 
 const COLORS = ['#38bdf8', '#fbbf24', '#4ade80', '#a78bfa', '#f87171', '#22d3ee', '#fb923c', '#e879f9']
 const CATEGORIES = [
@@ -13,7 +15,7 @@ const CATEGORIES = [
 
 const PERIODS = ['daily', 'weekly', 'monthly', 'yearly']
 
-export default function SpendingTracker() {
+export default function SpendingTracker({ refreshKey = 0 }) {
   const [entries, setEntries] = useState([])
   const [period, setPeriod] = useState('daily')
   const [loading, setLoading] = useState(true)
@@ -26,7 +28,7 @@ export default function SpendingTracker() {
 
   useEffect(() => {
     loadData()
-  }, [period])
+  }, [period, refreshKey])
 
   async function loadData() {
     setLoading(true)
@@ -66,6 +68,12 @@ export default function SpendingTracker() {
     }
   }
 
+  async function handleQuickEntry(input) {
+    await addSpending(parseQuickSpending(input))
+    await loadData()
+    return 'Expense saved'
+  }
+
   const total = entries.reduce((sum, e) => sum + e.amount, 0)
   const byCategory = Object.entries(
     entries.reduce((acc, e) => {
@@ -86,6 +94,13 @@ export default function SpendingTracker() {
   return (
     <div>
       <h1 className="page-title">Spending Tracker</h1>
+
+      <QuickEntry
+        label="Quick expense"
+        placeholder="Quick expense — $24 lunch, 12.50 transport tomorrow…"
+        hint="Press Enter to save. Add a category word when you want one."
+        onSubmit={handleQuickEntry}
+      />
 
       <div className="period-filter">
         {PERIODS.map((p) => (
@@ -115,51 +130,35 @@ export default function SpendingTracker() {
       </div>
 
       <div className="form-card">
-        <h3>Add Spending</h3>
-        <form onSubmit={handleSubmit}>
-          <div className="form-row">
-            <div className="form-group">
-              <label>Amount ($)</label>
-              <input
-                type="number"
-                step="0.01"
-                min="0"
-                value={form.amount}
-                onChange={(e) => setForm({ ...form, amount: e.target.value })}
-                required
-                placeholder="25.00"
-              />
+        <details className="details-entry">
+          <summary>Need more detail? Open the full expense form</summary>
+          <form onSubmit={handleSubmit} className="details-entry-form">
+            <div className="form-row">
+              <div className="form-group">
+                <label>Amount ($)</label>
+                <input type="number" step="0.01" min="0" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} required placeholder="25.00" />
+              </div>
+              <div className="form-group">
+                <label>Category</label>
+                <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
+                  {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Date</label>
+                <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} required />
+              </div>
+              <div className="form-group">
+                <label>Description</label>
+                <input type="text" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Lunch at cafe" />
+              </div>
+              <button type="submit" className="btn btn-primary">Save expense</button>
             </div>
-            <div className="form-group">
-              <label>Category</label>
-              <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-                {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
-            </div>
-            <div className="form-group">
-              <label>Date</label>
-              <input
-                type="date"
-                value={form.date}
-                onChange={(e) => setForm({ ...form, date: e.target.value })}
-                required
-              />
-            </div>
-            <div className="form-group">
-              <label>Description</label>
-              <input
-                type="text"
-                value={form.description}
-                onChange={(e) => setForm({ ...form, description: e.target.value })}
-                placeholder="Lunch at cafe"
-              />
-            </div>
-            <button type="submit" className="btn btn-primary">Add</button>
-          </div>
-        </form>
+          </form>
+        </details>
       </div>
 
-      <Collapsible title="Charts & Analytics" count="4 charts">
+      <Collapsible title="Insights & analysis" count="4 charts" defaultOpen={false} className="analytics-section">
       <div className="charts-grid">
         <div className="chart-card">
           <h3>By Category</h3>

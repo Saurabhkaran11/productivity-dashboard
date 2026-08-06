@@ -1,6 +1,5 @@
 import React, { useMemo, useRef, useState, Component, Suspense } from 'react'
-import { Canvas } from '@react-three/fiber'
-import { Float } from '@react-three/drei'
+import { Canvas, useFrame } from '@react-three/fiber'
 import { useUISettings } from '../../context/SettingsContext'
 
 const SHAPES = [
@@ -34,11 +33,14 @@ function sceneEnabled() {
 
 function Geometry({ shape, color, size, pos, speed, reduced }) {
   const ref = useRef()
+  const baseY = pos[1]
+  const phase = pos[0] + pos[2]
 
   useFrame((state, delta) => {
     if (!ref.current || reduced) return
     ref.current.rotation.x += delta * speed
     ref.current.rotation.y += delta * speed * 1.4
+    ref.current.position.y = baseY + Math.sin(state.clock.elapsedTime * speed * 2 + phase) * 0.16
   })
 
   let geo = null
@@ -48,20 +50,18 @@ function Geometry({ shape, color, size, pos, speed, reduced }) {
   else geo = <sphereGeometry args={[size, 20, 20]} />
 
   return (
-    <Float speed={reduced ? 0 : 1.4} rotationIntensity={reduced ? 0 : 0.5} floatIntensity={reduced ? 0 : 0.8}>
-      <mesh ref={ref} position={pos}>
-        {geo}
-        <meshStandardMaterial
-          color={color}
-          emissive={color}
-          emissiveIntensity={0.25}
-          roughness={0.35}
-          metalness={0.1}
-          transparent
-          opacity={reduced ? 0.5 : 0.85}
-        />
-      </mesh>
-    </Float>
+    <mesh ref={ref} position={pos}>
+      {geo}
+      <meshStandardMaterial
+        color={color}
+        emissive={color}
+        emissiveIntensity={0.25}
+        roughness={0.35}
+        metalness={0.1}
+        transparent
+        opacity={reduced ? 0.5 : 0.85}
+      />
+    </mesh>
   )
 }
 

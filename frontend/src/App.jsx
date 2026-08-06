@@ -19,6 +19,7 @@ import ExportSection from './components/ExportSection'
 import SettingsPage from './components/SettingsPage'
 import GooglePage from './components/GooglePage'
 import Login from './components/Login'
+import QuickCapture from './components/QuickCapture'
 
 const Scene3D = lazy(() => import('./components/three/Scene3D'))
 
@@ -74,11 +75,26 @@ const PAGE_VOICE_TEXT = {
   settings: 'You are on the Settings page. Connect Google, set up email reports, and change how the app looks for you.',
 }
 
+const PAGE_META = {
+  dashboard: { eyebrow: 'Your command center', title: 'Daily overview' },
+  spending: { eyebrow: 'Financial clarity', title: 'Spending tracker' },
+  todos: { eyebrow: 'Stay in motion', title: 'To-do list' },
+  work: { eyebrow: 'Deep work', title: 'Work tracker' },
+  schedule: { eyebrow: 'Plan your time', title: 'Schedule' },
+  google: { eyebrow: 'Connected workspace', title: 'My Google' },
+  export: { eyebrow: 'Your data, portable', title: 'Export center' },
+  settings: { eyebrow: 'Personalize MyLife', title: 'Settings' },
+}
+
 export default function App() {
   const { user, loading, logout } = useAuth()
   const { settings } = useUISettings()
   const [page, setPage] = useState('dashboard')
   const [helpOpen, setHelpOpen] = useState(false)
+  const [dataVersion, setDataVersion] = useState(0)
+  const todayLabel = useMemo(() => new Intl.DateTimeFormat(undefined, {
+    weekday: 'long', month: 'short', day: 'numeric',
+  }).format(new Date()), [])
 
   const goToPage = useCallback((id) => {
     if (NAV.some((n) => n.id === id)) setPage(id)
@@ -176,11 +192,11 @@ export default function App() {
 
   const renderPage = () => {
     switch (page) {
-      case 'dashboard': return <Dashboard />
-      case 'spending': return <SpendingTracker />
-      case 'todos': return <TodoList />
-      case 'work': return <WorkTracker />
-      case 'schedule': return <Schedule />
+      case 'dashboard': return <Dashboard refreshKey={dataVersion} />
+      case 'spending': return <SpendingTracker refreshKey={dataVersion} />
+      case 'todos': return <TodoList refreshKey={dataVersion} />
+      case 'work': return <WorkTracker refreshKey={dataVersion} />
+      case 'schedule': return <Schedule refreshKey={dataVersion} />
       case 'google': return <GooglePage />
       case 'export': return <ExportSection />
       case 'settings': return <SettingsPage />
@@ -188,29 +204,35 @@ export default function App() {
     }
   }
 
+  const pageMeta = PAGE_META[page] || PAGE_META.dashboard
+
   return (
     <>
       <SceneBackground />
       <div className="app">
         <nav className="sidebar">
           {brand}
+          <div className="nav-section-label">Workspace</div>
           {NAV.map((item) => {
             const Icon = item.icon
             return (
               <Tooltip key={item.id} label={item.label} side="right">
-                <div
+                <button
+                  type="button"
                   className={`nav-item ${page === item.id ? 'active' : ''}`}
                   onClick={() => { goToPage(item.id); setHelpOpen(false) }}
+                  aria-current={page === item.id ? 'page' : undefined}
                 >
                   <Icon size={20} />
                   <span className="nav-label">{item.label}</span>
-                </div>
+                </button>
               </Tooltip>
             )
           })}
           <div className="sidebar-footer">
             <Tooltip label={`Log out ${user.name}`} side="right">
-              <div
+              <button
+                type="button"
                 className="nav-item"
                 onClick={() => {
                   voice.speak(`Goodbye ${user.name}. You are now logged out.`)
@@ -219,12 +241,23 @@ export default function App() {
               >
                 <LogOut size={20} />
                 <span className="nav-label">{user.name}</span>
-              </div>
+              </button>
             </Tooltip>
           </div>
         </nav>
         <main className="main">
-          <Card3D className="page-3d">
+          <header className="app-topbar">
+            <div>
+              <p className="topbar-eyebrow">{pageMeta.eyebrow}</p>
+              <p className="topbar-title">{pageMeta.title}</p>
+            </div>
+            <QuickCapture onCreated={() => setDataVersion((version) => version + 1)} />
+            <div className="topbar-actions">
+              <span className="today-label">{todayLabel}</span>
+              <span className="user-orb" aria-label={`Signed in as ${user.name}`}>{user.name?.slice(0, 1).toUpperCase()}</span>
+            </div>
+          </header>
+          <Card3D className="page-3d" tilt={2.5} scale={1.003}>
             {renderPage()}
           </Card3D>
         </main>

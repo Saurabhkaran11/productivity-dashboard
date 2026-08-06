@@ -5,11 +5,13 @@ import {
 } from 'recharts'
 import { getTodos, addTodo, updateTodo, deleteTodo } from '../utils/api'
 import Collapsible from './Collapsible'
+import QuickEntry from './QuickEntry'
+import { parseQuickTodo } from '../utils/quickCapture'
 
 const PROGRESS_COLORS = ['#4ade80', '#f87171']
 const PRIORITY_COLORS = { high: '#f87171', medium: '#fbbf24', low: '#4ade80' }
 
-export default function TodoList() {
+export default function TodoList({ refreshKey = 0 }) {
   const [todos, setTodos] = useState([])
   const [loading, setLoading] = useState(true)
   const [form, setForm] = useState({
@@ -21,7 +23,7 @@ export default function TodoList() {
 
   useEffect(() => {
     loadData()
-  }, [])
+  }, [refreshKey])
 
   async function loadData() {
     setLoading(true)
@@ -70,6 +72,12 @@ export default function TodoList() {
     }
   }
 
+  async function handleQuickEntry(input) {
+    await addTodo(parseQuickTodo(input))
+    await loadData()
+    return 'Task saved'
+  }
+
   const pendingCount = todos.filter((t) => !t.completed).length
   const completedCount = todos.filter((t) => t.completed).length
   const highCount = todos.filter((t) => !t.completed && t.priority === 'high').length
@@ -92,6 +100,13 @@ export default function TodoList() {
     <div>
       <h1 className="page-title">To-Do List</h1>
 
+      <QuickEntry
+        label="Quick task"
+        placeholder="Quick task — Finish report tomorrow #high…"
+        hint="Press Enter to save. Use #high, #medium, or #low when needed."
+        onSubmit={handleQuickEntry}
+      />
+
       <div className="card-grid">
         <div className="card">
           <h3>Pending</h3>
@@ -111,7 +126,7 @@ export default function TodoList() {
         </div>
       </div>
 
-      <Collapsible title="Charts & Analytics" count="3 charts">
+      <Collapsible title="Insights & analysis" count="3 charts" defaultOpen={false} className="analytics-section">
       <div className="charts-grid">
         <div className="chart-card">
           <h3>Completion Progress</h3>
@@ -181,47 +196,32 @@ export default function TodoList() {
       </Collapsible>
 
       <div className="form-card">
-        <h3>Add To-Do</h3>
-        <form onSubmit={handleSubmit}>
-          <div className="form-row">
-            <div className="form-group" style={{ flex: 2 }}>
-              <label>Title</label>
-              <input
-                type="text"
-                value={form.title}
-                onChange={(e) => setForm({ ...form, title: e.target.value })}
-                required
-                placeholder="Finish project report"
-              />
+        <details className="details-entry">
+          <summary>Need more detail? Open the full task form</summary>
+          <form onSubmit={handleSubmit} className="details-entry-form">
+            <div className="form-row">
+              <div className="form-group" style={{ flex: 2 }}>
+                <label>Title</label>
+                <input type="text" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required placeholder="Finish project report" />
+              </div>
+              <div className="form-group">
+                <label>Priority</label>
+                <select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}>
+                  <option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option>
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Due Date</label>
+                <input type="date" value={form.due_date} onChange={(e) => setForm({ ...form, due_date: e.target.value })} />
+              </div>
+              <button type="submit" className="btn btn-primary">Save task</button>
             </div>
-            <div className="form-group">
-              <label>Priority</label>
-              <select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })}>
-                <option value="high">High</option>
-                <option value="medium">Medium</option>
-                <option value="low">Low</option>
-              </select>
+            <div className="form-group" style={{ marginTop: 8 }}>
+              <label>Description</label>
+              <textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={2} placeholder="Optional details..." />
             </div>
-            <div className="form-group">
-              <label>Due Date</label>
-              <input
-                type="date"
-                value={form.due_date}
-                onChange={(e) => setForm({ ...form, due_date: e.target.value })}
-              />
-            </div>
-            <button type="submit" className="btn btn-primary">Add</button>
-          </div>
-          <div className="form-group" style={{ marginTop: 8 }}>
-            <label>Description</label>
-            <textarea
-              value={form.description}
-              onChange={(e) => setForm({ ...form, description: e.target.value })}
-              rows={2}
-              placeholder="Optional details..."
-            />
-          </div>
-        </form>
+          </form>
+        </details>
       </div>
 
       <div className="form-card">
