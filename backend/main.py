@@ -10,7 +10,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 import pandas as pd
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from io import BytesIO
 
@@ -175,16 +175,10 @@ def google_callback(code: str, error: str = None, _=Depends(rate_limit(limit=10,
     user = dict(c.fetchone())
     conn.close()
 
-    redirect = f"{gi.FRONTEND_URL}/login?google_token={create_token(user['id'])}"
-    return f"""
-    <html><body style="font-family:sans-serif;background:#0f172a;color:#e2e8f0;display:flex;justify-content:center;align-items:center;height:100vh">
-      <div style="text-align:center">
-        <h2>Login successful!</h2>
-        <p>You can close this window and return to the app.</p>
-        <script>setTimeout(function(){{ window.close(); }}, 1200);</script>
-      </div>
-    </body></html>
-    """
+    # Redirect back to the frontend so its auth provider can persist the
+    # session.  The former success page never delivered the token to the app.
+    redirect = f"{gi.FRONTEND_URL.rstrip('/')}/login?google_token={create_token(user['id'])}"
+    return RedirectResponse(url=redirect, status_code=303)
 
 
 # ============================================================
@@ -193,7 +187,7 @@ def google_callback(code: str, error: str = None, _=Depends(rate_limit(limit=10,
 
 @app.get("/spending", response_model=list[SpendingResponse])
 def get_spending(
-    period: str = Query("daily", regex="^(daily|weekly|monthly|yearly)$"),
+    period: str = Query("daily", pattern="^(daily|weekly|monthly|yearly)$"),
     category: str = Query(None),
     start_date: str = Query(None),
     end_date: str = Query(None),
@@ -566,6 +560,12 @@ def _date_range(period: str, today: datetime):
 def _tables_df(user_id: int, start_date, end_date):
     conn = get_db()
     result = {}
+    table_columns = {
+        "spending": ["id", "user_id", "amount", "category", "description", "date", "created_at"],
+        "todos": ["id", "user_id", "title", "description", "completed", "priority", "due_date", "created_at"],
+        "work_log": ["id", "user_id", "task", "project", "hours", "date", "notes", "created_at"],
+        "schedule": ["id", "user_id", "title", "start_time", "end_time", "date", "recurring", "notes", "created_at"],
+    }
     for table in ("spending", "todos", "work_log", "schedule"):
         query = f"SELECT * FROM {table} WHERE user_id = ?"
         params = [user_id]
@@ -574,7 +574,14 @@ def _tables_df(user_id: int, start_date, end_date):
             params.append(start_date)
             query += " AND date <= ?"
             params.append(end_date)
-        result[table] = pd.read_sql_query(query, conn, params=params)
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        # Avoid pandas' SQLite-specific query path so Excel/PDF exports work
+        # with the PostgreSQL compatibility connection as well.
+        result[table] = pd.DataFrame(
+            [dict(row) for row in cursor.fetchall()],
+            columns=table_columns[table],
+        )
     conn.close()
     return result
 
@@ -690,8 +697,8 @@ def build_email_html(user_id: int, start_date, end_date, period: str) -> str:
 
 @app.get("/export/excel")
 def export_excel(
-    data_type: str = Query("all", regex="^(spending|todos|worklog|schedule|all)$"),
-    period: str = Query("all", regex="^(daily|weekly|monthly|yearly|all)$"),
+    data_type: str = Query("all", pattern="^(spending|todos|worklog|schedule|all)$"),
+    period: str = Query("all", pattern="^(daily|weekly|monthly|yearly|all)$"),
     user: dict = Depends(get_current_user),
 ):
     start, end = _date_range(period, datetime.now())
@@ -705,8 +712,8 @@ def export_excel(
 
 @app.get("/export/pdf")
 def export_pdf(
-    data_type: str = Query("all", regex="^(spending|todos|worklog|schedule|all)$"),
-    period: str = Query("all", regex="^(daily|weekly|monthly|yearly|all)$"),
+    data_type: str = Query("all", pattern="^(spending|todos|worklog|schedule|all)$"),
+    period: str = Query("all", pattern="^(daily|weekly|monthly|yearly|all)$"),
     user: dict = Depends(get_current_user),
 ):
     start, end = _date_range(period, datetime.now())

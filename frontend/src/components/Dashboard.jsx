@@ -4,12 +4,30 @@ import {
   PieChart, Pie, Cell, LineChart, Line, XAxis, YAxis,
   CartesianGrid, Tooltip, Legend
 } from 'recharts'
+import {
+  ArrowUpRight, CalendarClock, CheckCircle2, CircleDollarSign,
+  Clock3, ListChecks, Timer, WalletCards,
+} from 'lucide-react'
 import { getSpending, getWorkLog, getSummary } from '../utils/api'
 import Collapsible from './Collapsible'
 
 const COLORS = ['#38bdf8', '#fbbf24', '#4ade80', '#a78bfa', '#f87171', '#22d3ee', '#fb923c', '#e879f9']
 
-export default function Dashboard() {
+function MetricCard({ label, value, detail, tone, icon: Icon }) {
+  return (
+    <article className={`metric-card metric-${tone}`}>
+      <div className="metric-icon"><Icon size={19} /></div>
+      <div className="metric-copy">
+        <p>{label}</p>
+        <strong>{value}</strong>
+        <span>{detail}</span>
+      </div>
+      <ArrowUpRight className="metric-arrow" size={18} aria-hidden="true" />
+    </article>
+  )
+}
+
+export default function Dashboard({ refreshKey = 0 }) {
   const [summary, setSummary] = useState(null)
   const [spending, setSpending] = useState([])
   const [workLog, setWorkLog] = useState([])
@@ -17,7 +35,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     loadData()
-  }, [])
+  }, [refreshKey])
 
   async function loadData() {
     setLoading(true)
@@ -89,58 +107,86 @@ export default function Dashboard() {
 
   const totalScheduledHours = scheduleUtilData.reduce((sum, d) => sum + d.hours, 0)
   const scheduleUtilPct = Math.min(Math.round((totalScheduledHours / 24) * 100), 100)
+  const todaySchedule = summary.today_schedule || []
+  const number = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 })
+  const currency = new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD' })
+  const greeting = new Date().getHours() < 12 ? 'Good morning' : new Date().getHours() < 18 ? 'Good afternoon' : 'Good evening'
 
   return (
-    <div>
-      <h1 className="page-title">Dashboard</h1>
+    <div className="dashboard-view">
+      <section className="dashboard-hero">
+        <div className="hero-copy">
+          <span className="hero-kicker"><span className="live-dot" /> {greeting}</span>
+          <h1>Make today <em>count.</em></h1>
+          <p>One clear view of your money, focus time, and priorities—designed to keep momentum effortless.</p>
+          <div className="hero-meta">
+            <span><CalendarClock size={15} /> {todaySchedule.length} events today</span>
+            <span><CheckCircle2 size={15} /> {completedPct}% complete</span>
+          </div>
+        </div>
+        <div className="hero-orbit" aria-hidden="true">
+          <div className="orbit-ring orbit-ring-one" />
+          <div className="orbit-ring orbit-ring-two" />
+          <div className="orbit-satellite orbit-satellite-one" />
+          <div className="orbit-satellite orbit-satellite-two" />
+          <div className="orbit-core"><span>{completedPct}%</span><small>on track</small></div>
+        </div>
+      </section>
 
-      <div className="card-grid">
-        <div className="card">
-          <h3>Today's Spending</h3>
-          <div className="value red">${summary.today_spending.toFixed(2)}</div>
-        </div>
-        <div className="card">
-          <h3>Total Spending</h3>
-          <div className="value">${summary.total_spending.toFixed(2)}</div>
-        </div>
-        <div className="card">
-          <h3>Work Hours Today</h3>
-          <div className="value blue">{summary.today_work_hours}h</div>
-        </div>
-        <div className="card">
-          <h3>Pending Todos</h3>
-          <div className="value yellow">{summary.pending_todos}</div>
-        </div>
-        <div className="card">
-          <h3>Completed</h3>
-          <div className="value green">{summary.completed_todos}</div>
-        </div>
-        <div className="card">
-          <h3>Task Completion</h3>
-          <div className="value purple">{completedPct}%</div>
-        </div>
-      </div>
+      <section className="metric-grid" aria-label="Today's key metrics">
+        <MetricCard label="Today's spending" value={currency.format(summary.today_spending)} detail="Tracked today" tone="rose" icon={CircleDollarSign} />
+        <MetricCard label="Focus time" value={`${summary.today_work_hours}h`} detail="Logged today" tone="sky" icon={Timer} />
+        <MetricCard label="Tasks remaining" value={number.format(summary.pending_todos)} detail={`${summary.completed_todos} completed`} tone="amber" icon={ListChecks} />
+        <MetricCard label="Total spending" value={currency.format(summary.total_spending)} detail="All-time record" tone="violet" icon={WalletCards} />
+      </section>
 
-      <div className="form-card">
-        <h3>Today's Schedule</h3>
-        {summary.today_schedule.length === 0 ? (
-          <p style={{ color: '#94a3b8' }}>No events scheduled for today.</p>
-        ) : (
-          summary.today_schedule.map((ev) => (
-            <div className="schedule-item" key={ev.id}>
-              <div className="schedule-time">
-                {ev.start_time} - {ev.end_time}
-              </div>
-              <div className="schedule-details">
-                <h4>{ev.title}</h4>
-                {ev.notes && <p>{ev.notes}</p>}
-              </div>
+      <section className="dashboard-split">
+        <div className="agenda-panel">
+          <div className="panel-heading">
+            <div>
+              <span>Timeline</span>
+              <h2>Today’s agenda</h2>
             </div>
-          ))
-        )}
-      </div>
+            <CalendarClock size={20} aria-hidden="true" />
+          </div>
+          {todaySchedule.length === 0 ? (
+            <div className="agenda-empty">
+              <CalendarClock size={22} />
+              <p>Your calendar is clear. Use the breathing room for something that matters.</p>
+            </div>
+          ) : (
+            <div className="agenda-list">
+              {todaySchedule.map((ev) => (
+                <div className="agenda-item" key={ev.id}>
+                  <div className="agenda-time">{ev.start_time}<span>{ev.end_time}</span></div>
+                  <div className="agenda-line" />
+                  <div className="agenda-details">
+                    <strong>{ev.title}</strong>
+                    {ev.notes && <span>{ev.notes}</span>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
-      <Collapsible title="Charts & Analytics" count="7 charts">
+        <aside className="focus-panel">
+          <div className="panel-heading">
+            <div>
+              <span>Momentum</span>
+              <h2>Daily balance</h2>
+            </div>
+            <Clock3 size={20} aria-hidden="true" />
+          </div>
+          <div className="radial-progress" style={{ '--progress': `${completedPct * 3.6}deg` }}>
+            <div><strong>{completedPct}%</strong><span>tasks done</span></div>
+          </div>
+          <div className="balance-row"><span>Scheduled time</span><strong>{totalScheduledHours.toFixed(1)}h <small>· {scheduleUtilPct}%</small></strong></div>
+          <div className="balance-row"><span>Unscheduled time</span><strong>{Math.max(0, 24 - totalScheduledHours).toFixed(1)}h</strong></div>
+        </aside>
+      </section>
+
+      <Collapsible title="Insights & analysis" count="7 charts" defaultOpen={false} className="analytics-section">
       <div className="charts-grid">
         <div className="chart-card">
           <h3>To-Do Progress</h3>

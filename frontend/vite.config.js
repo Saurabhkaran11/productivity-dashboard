@@ -13,11 +13,13 @@ export default defineConfig({
     }
   },
   build: {
-    chunkSizeWarningLimit: 800,
+    // The three.js runtime is lazy-loaded only on WebGL-capable devices and is
+    // intentionally kept in its own cacheable chunk.
+    chunkSizeWarningLimit: 900,
     rollupOptions: {
       output: {
         manualChunks: {
-          three: ['three', '@react-three/fiber', '@react-three/drei'],
+          three: ['three', '@react-three/fiber'],
         },
       },
     },
