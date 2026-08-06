@@ -199,7 +199,7 @@ export default function App() {
       case 'schedule': return <Schedule refreshKey={dataVersion} />
       case 'google': return <GooglePage />
       case 'export': return <ExportSection />
-      case 'settings': return <SettingsPage />
+      case 'settings': return <SettingsPage onOpenGoogle={() => goToPage('google')} />
       default: return <Dashboard />
     }
   }

@@ -3,18 +3,23 @@ import {
   User, LogOut, Cloud, Table2, HardDrive, Mail, Send,
   CheckCircle2, RefreshCw, Loader2, AlarmClock, Eye,
   Contrast, Type, MousePointerClick, Pause, Volume2, Palette,
+  ShieldCheck, SlidersHorizontal,
 } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import { useUISettings, THEMES } from '../context/SettingsContext'
 import {
-  getSyncStatus, syncSheets, syncDrive,
+  getGoogleProducts, getSyncStatus, syncSheets, syncDrive,
   sendReportEmail, sendTestEmail, getEmailSettings, saveEmailSettings,
 } from '../utils/api'
+import { getGoogleProductIcon, GOOGLE_PRODUCT_ACCENTS } from '../constants/googleProducts'
 
-export default function SettingsPage() {
+export default function SettingsPage({ onOpenGoogle }) {
   const { user, logout } = useAuth()
   const { settings, update } = useUISettings()
   const [syncStatus, setSyncStatus] = useState(null)
+  const [googleProducts, setGoogleProducts] = useState([])
+  const [googleRefreshing, setGoogleRefreshing] = useState(false)
+  const [googleCheckedAt, setGoogleCheckedAt] = useState(null)
   const [busy, setBusy] = useState('')
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
@@ -33,11 +38,25 @@ export default function SettingsPage() {
     loadEmailSettings()
   }, [])
 
-  async function loadStatus() {
+  async function loadStatus({ announce = false } = {}) {
+    setGoogleRefreshing(true)
     try {
-      const res = await getSyncStatus()
-      setSyncStatus(res.data)
-    } catch (e) { /* ignore */ }
+      const [statusResponse, productsResponse] = await Promise.all([
+        getSyncStatus(),
+        getGoogleProducts(),
+      ])
+      setSyncStatus(statusResponse.data)
+      setGoogleProducts(productsResponse.data.products || [])
+      setGoogleCheckedAt(new Date())
+      if (announce) flash('Google login and tool status updated.')
+    } catch (e) {
+      if (announce) {
+        setError(e.response?.data?.detail || 'Could not refresh Google status.')
+        setResult(null)
+      }
+    } finally {
+      setGoogleRefreshing(false)
+    }
   }
 
   async function loadEmailSettings() {
@@ -117,7 +136,7 @@ export default function SettingsPage() {
     setBusy('')
   }
 
-  const googleConnected = syncStatus?.google_connected
+  const googleAccountLinked = syncStatus?.google_account_linked
   const serverConfigured = syncStatus?.google_configured_server
   const enabledGoogleProducts = syncStatus?.products || []
   const gmailEnabled = enabledGoogleProducts.includes('gmail')
@@ -148,7 +167,7 @@ export default function SettingsPage() {
         <div className="card">
           <h3>Google</h3>
           <div className="value" style={{ fontSize: 18 }}>
-            {googleConnected ? <span style={{ color: '#4ade80' }}>Connected</span> : <span style={{ color: '#94a3b8' }}>Not connected</span>}
+            {googleAccountLinked ? <span style={{ color: '#4ade80' }}>Signed in</span> : <span style={{ color: '#94a3b8' }}>Not signed in</span>}
           </div>
         </div>
       </div>
@@ -158,7 +177,32 @@ export default function SettingsPage() {
 
       {/* Google section */}
       <div className="form-card">
-        <h3><Cloud size={18} style={{ verticalAlign: '-3px', marginRight: 6 }} /> Google Account &amp; Cloud Backup</h3>
+        <div className="settings-section-heading">
+          <div>
+            <h3><Cloud size={18} style={{ verticalAlign: '-3px', marginRight: 6 }} /> Google login &amp; workspace</h3>
+            <p>Review your sign-in, server configuration, and every available Google tool in one place.</p>
+          </div>
+          <button className="btn btn-outline" onClick={() => loadStatus({ announce: true })} disabled={googleRefreshing}>
+            {googleRefreshing ? <Loader2 size={16} className="spin" /> : <RefreshCw size={16} />}
+            Refresh Google status
+          </button>
+        </div>
+
+        <div className="google-settings-status-grid">
+          <div className={`google-settings-status ${serverConfigured ? 'is-ready' : ''}`}>
+            <ShieldCheck size={18} />
+            <div><span>Server configuration</span><strong>{serverConfigured ? 'Ready' : 'Needs attention'}</strong></div>
+          </div>
+          <div className={`google-settings-status ${googleAccountLinked ? 'is-ready' : ''}`}>
+            <Cloud size={18} />
+            <div><span>Google login</span><strong>{googleAccountLinked ? 'Signed in' : 'Not linked'}</strong></div>
+          </div>
+          <div className={`google-settings-status ${enabledGoogleProducts.length ? 'is-ready' : ''}`}>
+            <SlidersHorizontal size={18} />
+            <div><span>Dashboard tools</span><strong>{enabledGoogleProducts.length} of {googleProducts.length || 5} added</strong></div>
+          </div>
+        </div>
+        {googleCheckedAt && <p className="google-settings-last-checked">Last checked {googleCheckedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</p>}
 
         {!serverConfigured && (
           <div className="notice">
@@ -174,15 +218,44 @@ export default function SettingsPage() {
 
         {serverConfigured && (
           <>
-            {googleConnected ? (
+            {googleAccountLinked ? (
               <p style={{ color: '#4ade80', display: 'flex', alignItems: 'center', gap: 8 }}>
-                <CheckCircle2 size={18} /> Connected as {syncStatus?.google_email}
+                <CheckCircle2 size={18} /> Google login linked to {syncStatus?.google_email}
               </p>
             ) : (
               <p style={{ color: 'var(--text-dim)', lineHeight: 1.6 }}>
-                Open <strong>My Google</strong> in the sidebar to add only the Google products you want to use.
+                Sign in with Google, then choose only the tools you want to use in your dashboard.
               </p>
             )}
+
+            <section className="google-settings-catalog" aria-label="Available Google tools">
+              <div className="google-settings-catalog-heading">
+                <div>
+                  <p className="section-eyebrow">Available tools</p>
+                  <h4>Choose what belongs in your workspace</h4>
+                </div>
+                <button className="btn btn-primary" onClick={onOpenGoogle}>
+                  <SlidersHorizontal size={16} /> Manage Google tools
+                </button>
+              </div>
+              <div className="google-settings-tool-list">
+                {googleProducts.map((product) => {
+                  const Icon = getGoogleProductIcon(product)
+                  const isAdded = product.enabled
+                  const accent = GOOGLE_PRODUCT_ACCENTS[product.icon || product.id]
+                  return (
+                    <div className={`google-settings-tool ${isAdded ? 'is-added' : ''}`} key={product.id}>
+                      <span className="google-settings-tool-icon" style={{ '--product-accent': accent }}><Icon size={18} /></span>
+                      <div>
+                        <strong>{product.label}</strong>
+                        <span>{product.api_name}</span>
+                      </div>
+                      <span className={`google-product-state ${isAdded ? 'is-added' : ''}`}>{isAdded ? 'Added' : 'Available'}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </section>
 
             {enabledGoogleProducts.some((product) => product === 'sheets' || product === 'drive') && (
               <div className="settings-block">
