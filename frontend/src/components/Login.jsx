@@ -44,11 +44,15 @@ export default function Login({ brand }) {
 
   async function handleGoogle() {
     setError('')
+    setMsg('')
     setBusy(true)
     try {
       const res = await getGoogleUrl()
-      window.open(res.data.url, '_blank', 'width=520,height=640')
-      setMsg('A Google window opened. After you sign in there, return here — your account will connect automatically.')
+      // Keep OAuth in this tab.  Popup flows are often blocked or detached by
+      // browser privacy protections, which prevents the completed sign-in from
+      // reaching the original dashboard tab.
+      window.location.assign(res.data.url)
+      return
     } catch (err) {
       setError(
         err.response?.data?.detail ||
