@@ -20,6 +20,8 @@ export default function SettingsPage({ onOpenGoogle }) {
   const [googleProducts, setGoogleProducts] = useState([])
   const [googleRefreshing, setGoogleRefreshing] = useState(false)
   const [googleCheckedAt, setGoogleCheckedAt] = useState(null)
+  const [googleStatusError, setGoogleStatusError] = useState('')
+  const [googleCatalogError, setGoogleCatalogError] = useState('')
   const [busy, setBusy] = useState('')
   const [result, setResult] = useState(null)
   const [error, setError] = useState('')
@@ -40,16 +42,24 @@ export default function SettingsPage({ onOpenGoogle }) {
 
   async function loadStatus({ announce = false } = {}) {
     setGoogleRefreshing(true)
+    setGoogleStatusError('')
+    setGoogleCatalogError('')
     try {
-      const [statusResponse, productsResponse] = await Promise.all([
-        getSyncStatus(),
-        getGoogleProducts(),
-      ])
+      const statusResponse = await getSyncStatus()
       setSyncStatus(statusResponse.data)
-      setGoogleProducts(productsResponse.data.products || [])
       setGoogleCheckedAt(new Date())
+
+      try {
+        const productsResponse = await getGoogleProducts()
+        setGoogleProducts(productsResponse.data.products || [])
+      } catch (catalogError) {
+        setGoogleProducts([])
+        setGoogleCatalogError(catalogError.response?.data?.detail || 'Could not load the Google tool catalog.')
+      }
+
       if (announce) flash('Google login and tool status updated.')
     } catch (e) {
+      setGoogleStatusError(e.response?.data?.detail || 'Could not check your Google connection. Sign out and back in, then try again.')
       if (announce) {
         setError(e.response?.data?.detail || 'Could not refresh Google status.')
         setResult(null)
@@ -138,6 +148,7 @@ export default function SettingsPage({ onOpenGoogle }) {
 
   const googleAccountLinked = syncStatus?.google_account_linked
   const serverConfigured = syncStatus?.google_configured_server
+  const googleStatusKnown = Boolean(syncStatus)
   const enabledGoogleProducts = syncStatus?.products || []
   const gmailEnabled = enabledGoogleProducts.includes('gmail')
 
@@ -191,7 +202,7 @@ export default function SettingsPage({ onOpenGoogle }) {
         <div className="google-settings-status-grid">
           <div className={`google-settings-status ${serverConfigured ? 'is-ready' : ''}`}>
             <ShieldCheck size={18} />
-            <div><span>Server configuration</span><strong>{serverConfigured ? 'Ready' : 'Needs attention'}</strong></div>
+            <div><span>Server configuration</span><strong>{!googleStatusKnown ? 'Checking…' : serverConfigured ? 'Ready' : 'Needs attention'}</strong></div>
           </div>
           <div className={`google-settings-status ${googleAccountLinked ? 'is-ready' : ''}`}>
             <Cloud size={18} />
@@ -203,8 +214,9 @@ export default function SettingsPage({ onOpenGoogle }) {
           </div>
         </div>
         {googleCheckedAt && <p className="google-settings-last-checked">Last checked {googleCheckedAt.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</p>}
+        {googleStatusError && <div className="alert error">{googleStatusError}</div>}
 
-        {!serverConfigured && (
+        {googleStatusKnown && !serverConfigured && (
           <div className="notice">
             <strong>Google integration not configured on the server.</strong>
             <p style={{ marginTop: 6, lineHeight: 1.6 }}>
@@ -255,6 +267,7 @@ export default function SettingsPage({ onOpenGoogle }) {
                   )
                 })}
               </div>
+              {googleCatalogError && <p className="google-settings-last-checked">{googleCatalogError} Use Manage Google tools to try again.</p>}
             </section>
 
             {enabledGoogleProducts.some((product) => product === 'sheets' || product === 'drive') && (
