@@ -35,6 +35,14 @@ SQLITE_SCHEMAS = [
         report_time TEXT DEFAULT '18:00',
         report_last_sent TEXT,
         recipient TEXT,
+        weekly_report INTEGER DEFAULT 0,
+        weekly_report_day INTEGER DEFAULT 0,
+        weekly_report_time TEXT DEFAULT '09:00',
+        weekly_automation_last_run TEXT,
+        auto_sync_sheets INTEGER DEFAULT 0,
+        auto_sync_drive INTEGER DEFAULT 0,
+        auto_sync_tasks INTEGER DEFAULT 0,
+        todo_google_sync INTEGER DEFAULT 1,
         FOREIGN KEY(user_id) REFERENCES users(id)
     )
     """,
@@ -69,6 +77,8 @@ SQLITE_SCHEMAS = [
         completed INTEGER DEFAULT 0,
         priority TEXT DEFAULT 'medium',
         due_date TEXT,
+        google_task_id TEXT,
+        google_task_list_id TEXT,
         created_at TEXT DEFAULT (datetime('now'))
     )
     """,
@@ -233,7 +243,15 @@ def _pg_init(c):
                 daily_report INTEGER DEFAULT 0,
                 report_time TEXT DEFAULT '18:00',
                 report_last_sent TEXT,
-                recipient TEXT
+                recipient TEXT,
+                weekly_report INTEGER DEFAULT 0,
+                weekly_report_day INTEGER DEFAULT 0,
+                weekly_report_time TEXT DEFAULT '09:00',
+                weekly_automation_last_run TEXT,
+                auto_sync_sheets INTEGER DEFAULT 0,
+                auto_sync_drive INTEGER DEFAULT 0,
+                auto_sync_tasks INTEGER DEFAULT 0,
+                todo_google_sync INTEGER DEFAULT 1
             )
             """,
             """
@@ -266,6 +284,8 @@ def _pg_init(c):
                 completed INTEGER DEFAULT 0,
                 priority TEXT DEFAULT 'medium',
                 due_date TEXT,
+                google_task_id TEXT,
+                google_task_list_id TEXT,
                 created_at TEXT DEFAULT (now()::text)
             )
             """,
@@ -302,8 +322,23 @@ def _pg_init(c):
     for table in ("spending", "todos", "work_log", "schedule"):
         if not _pg_has_column(c, table, "user_id"):
             c.execute(f"ALTER TABLE {table} ADD COLUMN user_id INTEGER")
-    if not _pg_has_column(c, "user_settings", "recipient"):
-        c.execute("ALTER TABLE user_settings ADD COLUMN recipient TEXT")
+    user_settings_columns = {
+        "recipient": "TEXT",
+        "weekly_report": "INTEGER DEFAULT 0",
+        "weekly_report_day": "INTEGER DEFAULT 0",
+        "weekly_report_time": "TEXT DEFAULT '09:00'",
+        "weekly_automation_last_run": "TEXT",
+        "auto_sync_sheets": "INTEGER DEFAULT 0",
+        "auto_sync_drive": "INTEGER DEFAULT 0",
+        "auto_sync_tasks": "INTEGER DEFAULT 0",
+        "todo_google_sync": "INTEGER DEFAULT 1",
+    }
+    for column, definition in user_settings_columns.items():
+        if not _pg_has_column(c, "user_settings", column):
+            c.execute(f"ALTER TABLE user_settings ADD COLUMN {column} {definition}")
+    for column in ("google_task_id", "google_task_list_id"):
+        if not _pg_has_column(c, "todos", column):
+            c.execute(f"ALTER TABLE todos ADD COLUMN {column} TEXT")
     if not _pg_has_column(c, "users", "google_scopes"):
         c.execute("ALTER TABLE users ADD COLUMN google_scopes TEXT DEFAULT ''")
     if not _pg_has_column(c, "users", "google_products"):
@@ -356,8 +391,24 @@ def init_db():
         if "user_id" not in cols:
             c.execute(f"ALTER TABLE {table} ADD COLUMN user_id INTEGER")
     cols = [r[1] for r in c.execute("PRAGMA table_info(user_settings)").fetchall()]
-    if "recipient" not in cols:
-        c.execute("ALTER TABLE user_settings ADD COLUMN recipient TEXT")
+    sqlite_user_settings_columns = {
+        "recipient": "TEXT",
+        "weekly_report": "INTEGER DEFAULT 0",
+        "weekly_report_day": "INTEGER DEFAULT 0",
+        "weekly_report_time": "TEXT DEFAULT '09:00'",
+        "weekly_automation_last_run": "TEXT",
+        "auto_sync_sheets": "INTEGER DEFAULT 0",
+        "auto_sync_drive": "INTEGER DEFAULT 0",
+        "auto_sync_tasks": "INTEGER DEFAULT 0",
+        "todo_google_sync": "INTEGER DEFAULT 1",
+    }
+    for column, definition in sqlite_user_settings_columns.items():
+        if column not in cols:
+            c.execute(f"ALTER TABLE user_settings ADD COLUMN {column} {definition}")
+    todo_cols = [r[1] for r in c.execute("PRAGMA table_info(todos)").fetchall()]
+    for column in ("google_task_id", "google_task_list_id"):
+        if column not in todo_cols:
+            c.execute(f"ALTER TABLE todos ADD COLUMN {column} TEXT")
     user_cols = [r[1] for r in c.execute("PRAGMA table_info(users)").fetchall()]
     if "google_scopes" not in user_cols:
         c.execute("ALTER TABLE users ADD COLUMN google_scopes TEXT DEFAULT ''")

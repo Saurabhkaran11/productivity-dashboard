@@ -21,8 +21,9 @@ A friendly, colorful, **3D** productivity dashboard for anyone — kids, adults,
 - **Daily Schedule** — time-blocked events with recurring option; time-utilization pie charts
 - **Export & Reports** — PDF + Excel downloads for daily/weekly/monthly/yearly/all-time
 - **Accounts** — email/password signup, or Google login (Gmail, Yahoo, etc.), with per-user private data
-- **Google Cloud** — export data to Google Sheets, backup PDF/Excel to Google Drive
-- **Email notifications** — daily/weekly/monthly/yearly reports to your inbox (Gmail API or SMTP), optional daily auto-send
+- **Google Cloud** — export all dashboard data to Google Sheets, archive PDF/Excel backups to Drive, and mirror local to-dos to Google Tasks
+- **Email notifications** — daily/weekly/monthly/yearly reports to your inbox (Gmail API or SMTP), with opt-in daily and weekly delivery
+- **Weekly Google automation** — select Sheets, Drive, Tasks and/or a weekly analysis email, choose a day and time, then test it with “Run weekly automation now”
 
 ## Tech Stack
 
@@ -95,14 +96,30 @@ See the `terraform/` folder. One `terraform apply` provisions: a VPC, an SSL cer
 
 1. https://console.cloud.google.com/ → create a project.
 2. **APIs & Services → OAuth consent screen** → type **External** → add your email as a **Test user**.
-3. **Enable the APIs** you want to use: **Gmail API**, **Google Drive API**, **Google Sheets API**, **Google Calendar API** (all under APIs & Services → Library).
+3. **Enable the APIs** you want to use: **Gmail API**, **Google Drive API**, **Google Sheets API**, **Google Calendar API**, and **Google Tasks API** (all under APIs & Services → Library).
 4. **Credentials → Create Credentials → OAuth client ID**:
    - Type: **Web application**
    - Authorized redirect URI: `http://localhost:8000/auth/google/callback` (or your deployed URL)
 5. `cp backend/.env.example backend/.env` and paste the **Client ID / Secret**.
 6. Restart (`./start.sh` or redeploy).
 
-On the **Settings** page you can then: Connect Google, Export to Sheets, Backup to Drive, Send report to email, and schedule a daily auto-report. The **My Google** page shows your live Gmail inbox, Drive files, Sheets and Calendar in one place.
+On the **Settings** page you can then: connect Google, export to Sheets, back up to Drive, send reports, mirror MyLife to-dos to Google Tasks, and schedule daily or weekly automation. The **My Google** page shows your live Gmail inbox, Drive files, Sheets and Calendar in one place.
+
+### Reliable weekly automation on Render
+
+The web service checks due automations while it is running. For reliable delivery in production, create a [Render Cron Job](https://render.com/docs/cronjobs) which calls the protected endpoint every five minutes:
+
+1. In the **Web Service** environment, add a strong random `CRON_SECRET`.
+2. Create a **Cron Job** in the same Render account and give it two environment variables: `APP_URL` (for example `https://productivity-dashboard-hsr0.onrender.com`) and the same `CRON_SECRET`.
+3. Use schedule `*/5 * * * *` and this command:
+
+```bash
+curl --fail --silent --show-error -X POST "$APP_URL/cron/automations" -H "X-Cron-Secret: $CRON_SECRET"
+```
+
+4. In **Settings → Weekly Google automation**, select the actions you want, choose a day/time, save, then use **Run weekly automation now** to validate the connected products and email delivery. The manual test does not consume that week's scheduled run.
+
+To-dos are mirrored **one-way from MyLife to Google Tasks**. MyLife remains the source of truth, so edits made only inside Google Tasks are not imported back or used to overwrite the dashboard.
 
 ## SMTP (alternative email delivery)
 
@@ -118,6 +135,7 @@ Configure on the **Settings** page: Gmail `smtp.gmail.com` :587 with an App Pass
 | `MYLIFE_DB` | Path to the SQLite file | `backend/data.db` |
 | `ALLOWED_DOMAIN` | Restrict sign-up + Google login to one domain (empty = open) | empty |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` | Google OAuth | empty |
+| `CRON_SECRET` | Secret required by the protected recurring-automation endpoint | empty (endpoint disabled) |
 | `FRONTEND_DIST` | Where the built React app lives | `frontend/dist` |
 
 ## Security

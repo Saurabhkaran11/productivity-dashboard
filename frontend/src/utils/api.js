@@ -70,6 +70,10 @@ export const syncSheets = (dataType = 'all', period = 'monthly') =>
   api.post('/sync/sheets', null, { params: { data_type: dataType, period } })
 export const syncDrive = (period = 'monthly') =>
   api.post('/sync/drive', null, { params: { period } })
+export const syncLocalTodosToGoogle = () => api.post('/sync/tasks')
+export const getAutomationSettings = () => api.get('/settings/automation')
+export const saveAutomationSettings = (data) => api.put('/settings/automation', data)
+export const runWeeklyAutomation = () => api.post('/automation/run')
 
 // Google data
 export const listGmail = (q = '', max = 20) =>

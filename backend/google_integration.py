@@ -187,6 +187,10 @@ def authed_patch(user: dict, url: str, json_body: dict = None) -> tuple:
     return _authed_mutation(user, "PATCH", url, json_body)
 
 
+def authed_delete(user: dict, url: str) -> tuple:
+    return _authed_mutation(user, "DELETE", url)
+
+
 def revoke_token(token: str) -> None:
     if not token:
         return
@@ -484,3 +488,35 @@ def complete_google_task(user: dict, task_list_id: str, task_id: str, completed:
     )
     task["task_list_id"] = task_list_id
     return task, access
+
+
+def update_google_task(
+    user: dict,
+    task_list_id: str,
+    task_id: str,
+    title: str,
+    notes: str,
+    due: str = None,
+    completed: bool = False,
+) -> tuple:
+    """Keep a mapped local to-do aligned with its Google Tasks counterpart."""
+    body = {
+        "title": title,
+        "notes": notes or "",
+        "status": "completed" if completed else "needsAction",
+        "due": due,
+    }
+    task, access = authed_patch(
+        user,
+        f"https://tasks.googleapis.com/tasks/v1/lists/{task_list_id}/tasks/{task_id}",
+        body,
+    )
+    task["task_list_id"] = task_list_id
+    return task, access
+
+
+def delete_google_task(user: dict, task_list_id: str, task_id: str) -> tuple:
+    return authed_delete(
+        user,
+        f"https://tasks.googleapis.com/tasks/v1/lists/{task_list_id}/tasks/{task_id}",
+    )
