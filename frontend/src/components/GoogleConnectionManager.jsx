@@ -45,10 +45,11 @@ export default function GoogleConnectionManager({ onProductsChange }) {
       // A regular same-tab link is more dependable than a programmatic popup
       // or redirect in browsers that suppress navigation after an async call.
       setPendingConnection({
+        productId,
         label: product?.label || 'Google tool',
         url: response.data.url,
       })
-      setNotice(`Ready to connect ${product?.label || 'your Google tool'}. Continue below to approve access.`)
+      setNotice(`Ready to connect ${product?.label || 'your Google tool'}. Use Continue with Google on this card to approve access.`)
     } catch (err) {
       setError(err.response?.data?.detail || 'Could not start the Google connection.')
     }
@@ -110,23 +111,12 @@ export default function GoogleConnectionManager({ onProductsChange }) {
       )}
       {error && <div className="alert error">{error}</div>}
       {notice && <div className="alert success"><CheckCircle2 size={17} /> {notice}</div>}
-      {pendingConnection && (
-        <div className="google-connect-handoff">
-          <div>
-            <strong>Connect {pendingConnection.label}</strong>
-            <p>Approve only this tool’s requested access in Google.</p>
-          </div>
-          <div className="google-connect-handoff-actions">
-            <a className="btn btn-primary" href={pendingConnection.url}>Continue with Google</a>
-            <button className="btn btn-outline" onClick={() => setPendingConnection(null)}>Cancel</button>
-          </div>
-        </div>
-      )}
 
       <div className="google-product-grid">
         {(data?.products || []).map((product) => {
           const Icon = getGoogleProductIcon(product)
           const isBusy = busy === product.id
+          const awaitingApproval = pendingConnection?.productId === product.id
           const accent = GOOGLE_PRODUCT_ACCENTS[product.icon || product.id]
           return (
             <article className={`google-product-card ${product.enabled ? 'is-connected' : ''}`} key={product.id}>
@@ -149,6 +139,11 @@ export default function GoogleConnectionManager({ onProductsChange }) {
                   {isBusy ? <Loader2 size={15} className="spin" /> : <Unplug size={15} />}
                   Remove
                 </button>
+              ) : awaitingApproval ? (
+                <div className="google-product-connect-actions">
+                  <a className="btn btn-primary" href={pendingConnection.url}>Continue with Google</a>
+                  <button className="btn btn-outline" onClick={() => setPendingConnection(null)}>Cancel</button>
+                </div>
               ) : (
                 <button className="btn btn-primary" onClick={() => connect(product.id)} disabled={!data.configured || isBusy}>
                   {isBusy ? <Loader2 size={15} className="spin" /> : <Cloud size={15} />}
