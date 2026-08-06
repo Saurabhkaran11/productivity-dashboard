@@ -7,7 +7,7 @@ import {
 import { useAuth } from '../context/AuthContext'
 import { useUISettings, THEMES } from '../context/SettingsContext'
 import {
-  getGoogleUrl, getSyncStatus, syncSheets, syncDrive,
+  getSyncStatus, syncSheets, syncDrive,
   sendReportEmail, sendTestEmail, getEmailSettings, saveEmailSettings,
 } from '../utils/api'
 
@@ -51,18 +51,6 @@ export default function SettingsPage() {
     setResult(message)
     setError('')
     setTimeout(() => setResult(null), 6000)
-  }
-
-  async function handleGoogleConnect() {
-    setBusy('connect')
-    setError('')
-    try {
-      const res = await getGoogleUrl()
-      window.open(res.data.url, '_blank', 'width=520,height=640')
-    } catch (e) {
-      setError(e.response?.data?.detail || 'Google is not configured yet.')
-      setBusy('')
-    }
   }
 
   async function handleSync(kind) {
@@ -131,6 +119,8 @@ export default function SettingsPage() {
 
   const googleConnected = syncStatus?.google_connected
   const serverConfigured = syncStatus?.google_configured_server
+  const enabledGoogleProducts = syncStatus?.products || []
+  const gmailEnabled = enabledGoogleProducts.includes('gmail')
 
   const THEME_SWATCHES = {
     midnight: 'linear-gradient(135deg, #0f172a, #1e3a5f)',
@@ -175,61 +165,67 @@ export default function SettingsPage() {
             <strong>Google integration not configured on the server.</strong>
             <p style={{ marginTop: 6, lineHeight: 1.6 }}>
               To enable Google login, Sheets export, Drive backup and Gmail reports, follow the one-time setup
-              in the README: create an OAuth 2.0 client in Google Cloud Console, then add{' '}
+              in Google Cloud Console, then add{' '}
               <code>GOOGLE_CLIENT_ID</code> and <code>GOOGLE_CLIENT_SECRET</code> to{' '}
-              <code>backend/.env</code> and restart the backend.
+              your Render environment variables and redeploy.
             </p>
           </div>
         )}
 
         {serverConfigured && (
           <>
-            {!googleConnected ? (
-              <button className="btn btn-google" onClick={handleGoogleConnect} disabled={busy === 'connect'}>
-                {busy === 'connect' ? <Loader2 size={18} className="spin" /> : <Cloud size={18} />}
-                Connect Google Account (Gmail / Drive / Sheets)
-              </button>
-            ) : (
+            {googleConnected ? (
               <p style={{ color: '#4ade80', display: 'flex', alignItems: 'center', gap: 8 }}>
                 <CheckCircle2 size={18} /> Connected as {syncStatus?.google_email}
               </p>
+            ) : (
+              <p style={{ color: 'var(--text-dim)', lineHeight: 1.6 }}>
+                Open <strong>My Google</strong> in the sidebar to add only the Google products you want to use.
+              </p>
             )}
 
-            {googleConnected && (
+            {enabledGoogleProducts.some((product) => product === 'sheets' || product === 'drive') && (
               <div className="settings-block">
-                <h4>Sync to Google Sheets</h4>
-                <div className="form-row">
-                  <div className="form-group" style={{ maxWidth: 200 }}>
-                    <label>Period</label>
-                    <select value={sheetsPeriod} onChange={(e) => setSheetsPeriod(e.target.value)}>
-                      <option value="daily">Daily</option>
-                      <option value="weekly">Weekly</option>
-                      <option value="monthly">Monthly</option>
-                      <option value="yearly">Yearly</option>
-                    </select>
-                  </div>
-                  <button className="btn btn-success" onClick={() => handleSync('sheets')} disabled={busy === 'sheets'}>
-                    {busy === 'sheets' ? <Loader2 size={16} className="spin" /> : <Table2 size={16} />}
-                    Export to Sheets
-                  </button>
-                </div>
-
-                <h4 style={{ marginTop: 20 }}>Backup to Google Drive</h4>
-                <div className="form-row">
-                  <div className="form-group" style={{ maxWidth: 200 }}>
-                    <label>Period</label>
-                    <select value={drivePeriod} onChange={(e) => setDrivePeriod(e.target.value)}>
-                      <option value="daily">Daily</option>
-                      <option value="weekly">Weekly</option>
-                      <option value="monthly">Monthly</option>
-                      <option value="yearly">Yearly</option>
-                    </select>
-                  </div>
-                  <button className="btn btn-primary" onClick={() => handleSync('drive')} disabled={busy === 'drive'}>
-                    {busy === 'drive' ? <Loader2 size={16} className="spin" /> : <HardDrive size={16} />}
-                    Backup to Drive
-                  </button>
-                </div>
+                {enabledGoogleProducts.includes('sheets') && (
+                  <>
+                    <h4>Sync to Google Sheets</h4>
+                    <div className="form-row">
+                      <div className="form-group" style={{ maxWidth: 200 }}>
+                        <label>Period</label>
+                        <select value={sheetsPeriod} onChange={(e) => setSheetsPeriod(e.target.value)}>
+                          <option value="daily">Daily</option>
+                          <option value="weekly">Weekly</option>
+                          <option value="monthly">Monthly</option>
+                          <option value="yearly">Yearly</option>
+                        </select>
+                      </div>
+                      <button className="btn btn-success" onClick={() => handleSync('sheets')} disabled={busy === 'sheets'}>
+                        {busy === 'sheets' ? <Loader2 size={16} className="spin" /> : <Table2 size={16} />}
+                        Export to Sheets
+                      </button>
+                    </div>
+                  </>
+                )}
+                {enabledGoogleProducts.includes('drive') && (
+                  <>
+                    <h4 style={{ marginTop: 20 }}>Backup to Google Drive</h4>
+                    <div className="form-row">
+                      <div className="form-group" style={{ maxWidth: 200 }}>
+                        <label>Period</label>
+                        <select value={drivePeriod} onChange={(e) => setDrivePeriod(e.target.value)}>
+                          <option value="daily">Daily</option>
+                          <option value="weekly">Weekly</option>
+                          <option value="monthly">Monthly</option>
+                          <option value="yearly">Yearly</option>
+                        </select>
+                      </div>
+                      <button className="btn btn-primary" onClick={() => handleSync('drive')} disabled={busy === 'drive'}>
+                        {busy === 'drive' ? <Loader2 size={16} className="spin" /> : <HardDrive size={16} />}
+                        Backup to Drive
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </>
@@ -260,13 +256,13 @@ export default function SettingsPage() {
             Send test email
           </button>
         </div>
-        {googleConnected ? (
+        {gmailEnabled ? (
           <p style={{ color: '#94a3b8', fontSize: 13, marginTop: 8 }}>
             Emails are sent through your connected Gmail account. You can also configure any SMTP server below.
           </p>
         ) : (
           <p style={{ color: '#fbbf24', fontSize: 13, marginTop: 8 }}>
-            Connect Google to send via Gmail, or fill in SMTP settings below (e.g. Gmail App Password).
+            Add Gmail in My Google to send through Google, or configure SMTP below (for example, a Gmail App Password).
           </p>
         )}
 

@@ -2,19 +2,22 @@ import React, { useState, useEffect, useCallback } from 'react'
 import {
   Mail, HardDrive, Table2, CalendarDays, ExternalLink, Loader2,
   Cloud, Search, RefreshCw, Clock, FileText, Folder, FileSpreadsheet,
-  Inbox, AlertCircle, ChevronDown, MailOpen, MailPlus, CalendarRange,
+  Inbox, AlertCircle, ChevronDown, MailOpen, MailPlus, CalendarRange, CheckSquare, Plus,
 } from 'lucide-react'
 import {
-  getGoogleUrl, getSyncStatus,
+  getSyncStatus,
   listGmail, readGmail, listDrive, listSheets, listCalendar,
+  listGoogleTasks, addGoogleTask, updateGoogleTask,
 } from '../utils/api'
 import Collapsible from './Collapsible'
+import GoogleConnectionManager from './GoogleConnectionManager'
 
 const TABS = [
   { id: 'gmail', label: 'Gmail', icon: Mail },
   { id: 'drive', label: 'Drive', icon: HardDrive },
   { id: 'sheets', label: 'Sheets', icon: Table2 },
   { id: 'calendar', label: 'Calendar', icon: CalendarDays },
+  { id: 'tasks', label: 'Tasks', icon: CheckSquare },
 ]
 
 function formatBytes(bytes) {
@@ -55,6 +58,7 @@ function driveLabel(mime) {
 
 export default function GooglePage() {
   const [status, setStatus] = useState(null)
+  const [enabledProducts, setEnabledProducts] = useState([])
   const [tab, setTab] = useState('gmail')
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
@@ -69,6 +73,8 @@ export default function GooglePage() {
 
   const [sheetsList, setSheetsList] = useState([])
   const [events, setEvents] = useState([])
+  const [googleTasks, setGoogleTasks] = useState([])
+  const [newGoogleTask, setNewGoogleTask] = useState('')
 
   const loadStatus = useCallback(async () => {
     try {
@@ -81,6 +87,16 @@ export default function GooglePage() {
 
   const googleConnected = status?.google_connected
   const serverConfigured = status?.google_configured_server
+  const activeTabs = TABS.filter((item) => enabledProducts.includes(item.id))
+
+  const updateEnabledProducts = useCallback((products) => {
+    setEnabledProducts(products)
+    loadStatus()
+  }, [loadStatus])
+
+  useEffect(() => {
+    if (activeTabs.length && !enabledProducts.includes(tab)) setTab(activeTabs[0].id)
+  }, [activeTabs.length, enabledProducts, tab])
 
   const setTabError = (e, label) => {
     setError(e.response?.data?.detail || `Could not load ${label}. Make sure Google is connected.`)
@@ -126,6 +142,40 @@ export default function GooglePage() {
     setBusy('')
   }
 
+  async function loadGoogleTasks() {
+    setBusy('tasks')
+    setError('')
+    try {
+      const res = await listGoogleTasks(100)
+      setGoogleTasks(res.data.tasks)
+    } catch (e) { setTabError(e, 'Google Tasks') }
+    setBusy('')
+  }
+
+  async function createGoogleTask(e) {
+    e.preventDefault()
+    const title = newGoogleTask.trim()
+    if (!title) return
+    setBusy('task-create')
+    setError('')
+    try {
+      const res = await addGoogleTask({ title })
+      setGoogleTasks((current) => [res.data, ...current])
+      setNewGoogleTask('')
+    } catch (err) { setTabError(err, 'Google Tasks') }
+    setBusy('')
+  }
+
+  async function toggleGoogleTask(task) {
+    setBusy(`task-${task.id}`)
+    setError('')
+    try {
+      const res = await updateGoogleTask(task.task_list_id, task.id, task.status !== 'completed')
+      setGoogleTasks((current) => current.map((item) => item.id === task.id ? { ...item, ...res.data } : item))
+    } catch (err) { setTabError(err, 'Google Tasks') }
+    setBusy('')
+  }
+
   function switchTab(id) {
     setTab(id)
     setError('')
@@ -134,6 +184,7 @@ export default function GooglePage() {
     if (id === 'drive' && !driveList.length) loadDrive()
     if (id === 'sheets' && !sheetsList.length) loadSheets()
     if (id === 'calendar' && !events.length) loadCalendar()
+    if (id === 'tasks' && !googleTasks.length) loadGoogleTasks()
   }
 
   async function toggleExpand(id) {
@@ -150,45 +201,6 @@ export default function GooglePage() {
       setError(e.response?.data?.detail || 'Could not open email.')
     }
     setReading(false)
-  }
-
-  function connectGoogle() {
-    setBusy('connect')
-    setError('')
-    getGoogleUrl()
-      .then((res) => window.open(res.data.url, '_blank', 'width=520,height=640'))
-      .catch(() => setError('Google is not configured yet.'))
-      .finally(() => { setBusy(''); loadStatus() })
-  }
-
-  function connectPrompt() {
-    if (!serverConfigured) {
-      return (
-        <div className="google-connect">
-          <Cloud size={44} style={{ color: 'var(--text-faint)' }} />
-          <h3>Google is not set up on this server</h3>
-          <p>
-            The server needs <code>GOOGLE_CLIENT_ID</code> and{' '}
-            <code>GOOGLE_CLIENT_SECRET</code> in <code>backend/.env</code> to connect to
-            Gmail, Drive, Sheets and Calendar. See the README for the one-time setup.
-          </p>
-        </div>
-      )
-    }
-    return (
-      <div className="google-connect">
-        <Cloud size={44} style={{ color: 'var(--accent-soft)' }} />
-        <h3>Connect your Google account</h3>
-        <p>
-          Sign in with Google to see your Gmail inbox, Drive files, Sheets and Calendar —
-          all in one place.
-        </p>
-        <button className="btn btn-google" onClick={connectGoogle} disabled={busy === 'connect'}>
-          {busy === 'connect' ? <Loader2 size={18} className="spin" /> : <Cloud size={18} />}
-          Connect Google Account
-        </button>
-      </div>
-    )
   }
 
   function renderGmail() {
@@ -395,16 +407,65 @@ export default function GooglePage() {
     )
   }
 
+  function renderTasks() {
+    return (
+      <div>
+        <form className="form-row" onSubmit={createGoogleTask} style={{ marginBottom: 16 }}>
+          <div className="form-group" style={{ flex: 1 }}>
+            <input
+              placeholder="Add a Google Task…"
+              value={newGoogleTask}
+              onChange={(e) => setNewGoogleTask(e.target.value)}
+            />
+          </div>
+          <button className="btn btn-primary" type="submit" disabled={busy === 'task-create'}>
+            {busy === 'task-create' ? <Loader2 size={16} className="spin" /> : <Plus size={16} />}
+            Add task
+          </button>
+          <button className="btn btn-outline" type="button" onClick={loadGoogleTasks} disabled={busy === 'tasks'}>
+            <RefreshCw size={16} /> Refresh
+          </button>
+        </form>
+        <Collapsible title="Google Tasks" count={googleTasks.length}>
+          <div className="google-list">
+            {googleTasks.length === 0 && !busy && (
+              <div className="google-empty"><CheckSquare size={36} style={{ marginBottom: 10, color: 'var(--text-faint)' }} />No tasks found.</div>
+            )}
+            {googleTasks.map((task) => {
+              const completed = task.status === 'completed'
+              return (
+                <div className="google-item" key={task.id}>
+                  <input
+                    type="checkbox"
+                    checked={completed}
+                    disabled={busy === `task-${task.id}`}
+                    onChange={() => toggleGoogleTask(task)}
+                    aria-label={`Mark ${task.title} ${completed ? 'incomplete' : 'complete'}`}
+                  />
+                  <div className="google-item-body">
+                    <div className="google-item-title" style={completed ? { textDecoration: 'line-through', opacity: .65 } : undefined}>{task.title}</div>
+                    {task.notes && <div className="google-item-sub">{task.notes}</div>}
+                    {task.due && <div className="google-item-meta">Due {shortDate(task.due)}</div>}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </Collapsible>
+      </div>
+    )
+  }
+
   return (
     <div>
       <h1 className="page-title">My Google Data</h1>
       <p style={{ color: 'var(--text-dim)', marginBottom: 18, fontSize: 14 }}>
-        See everything from your connected Google account in one place — Gmail, Drive, Sheets and Calendar.
+        Add only the Google tools you use, then manage them in one focused workspace.
       </p>
 
-      {!serverConfigured || !googleConnected ? (
-        connectPrompt()
-      ) : (
+      <GoogleConnectionManager onProductsChange={updateEnabledProducts} />
+
+      {serverConfigured && activeTabs.length > 0 && (
         <>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
             <span style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#4ade80', fontSize: 14 }}>
@@ -418,7 +479,7 @@ export default function GooglePage() {
           {error && <div className="alert error">{error}</div>}
 
           <div className="google-tabs">
-            {TABS.map((t) => {
+            {activeTabs.map((t) => {
               const Icon = t.icon
               return (
                 <button key={t.id} className={`google-tab ${tab === t.id ? 'active' : ''}`} onClick={() => switchTab(t.id)}>
@@ -429,7 +490,7 @@ export default function GooglePage() {
           </div>
 
           <div className="form-card" style={{ background: 'transparent', border: 'none', padding: 0 }}>
-            {busy && !['gmail', 'drive', 'sheets', 'calendar'].includes(busy) ? null : (
+            {busy && !['gmail', 'drive', 'sheets', 'calendar', 'tasks'].includes(busy) ? null : (
               busy === 'gmail' && tab === 'gmail' ? (
                 <div className="google-empty" style={{ color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'center' }}>
                   <Loader2 size={18} className="spin" /> Loading your Gmail…
@@ -440,8 +501,16 @@ export default function GooglePage() {
             {tab === 'drive' && renderDrive()}
             {tab === 'sheets' && renderSheets()}
             {tab === 'calendar' && renderCalendar()}
+            {tab === 'tasks' && renderTasks()}
           </div>
         </>
+      )}
+
+      {serverConfigured && activeTabs.length === 0 && (
+        <div className="google-empty">
+          <Cloud size={34} style={{ marginBottom: 10, color: 'var(--text-faint)' }} />
+          <div>Add a Google product above to begin.</div>
+        </div>
       )}
     </div>
   )

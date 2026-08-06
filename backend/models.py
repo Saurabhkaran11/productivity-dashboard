@@ -24,6 +24,23 @@ class EmailSettings(BaseModel):
     recipient: Optional[str] = None
 
 
+class GoogleTaskCreate(BaseModel):
+    title: str
+    notes: Optional[str] = None
+    due: Optional[str] = None
+
+
+class GoogleTaskUpdate(BaseModel):
+    completed: bool
+
+
+class GoogleCalendarEventCreate(BaseModel):
+    title: str
+    start: str
+    end: str
+    description: Optional[str] = None
+
+
 class PriorityEnum(str, Enum):
     low = "low"
     medium = "medium"

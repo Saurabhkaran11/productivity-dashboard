@@ -322,6 +322,11 @@ def get_db():
 
     import sqlite3
 
+    # Containers and local environments may point SQLite at a directory that
+    # does not exist yet.  Create only the containing directory; production
+    # deployments should set DATABASE_URL and use PostgreSQL instead.
+    os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
+
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
@@ -336,6 +341,8 @@ def init_db():
                 _pg_init(c)
         return
     import sqlite3
+
+    os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
 
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row

@@ -13,16 +13,52 @@ GOOGLE_REDIRECT_URI = os.environ.get(
 )
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 
-SCOPES = [
+# Identity is intentionally separate from Workspace products.  Signing in with
+# Google should never silently grant access to a user's inbox, files, or calendar.
+IDENTITY_SCOPES = [
     "openid",
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/userinfo.profile",
-    "https://www.googleapis.com/auth/drive",
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/gmail.send",
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/calendar.events.readonly",
 ]
+
+# The dashboard only requests access to a product after the user explicitly
+# enables it.  Keep this catalog in one place so UI, OAuth, and API checks agree.
+GOOGLE_PRODUCTS = {
+    "gmail": {
+        "label": "Gmail",
+        "description": "Read your inbox and send dashboard reports.",
+        "scopes": [
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.send",
+        ],
+    },
+    "calendar": {
+        "label": "Google Calendar",
+        "description": "View and add events from your productivity dashboard.",
+        "scopes": ["https://www.googleapis.com/auth/calendar.events"],
+    },
+    "drive": {
+        "label": "Google Drive",
+        "description": "Browse file metadata and save dashboard backups.",
+        "scopes": [
+            "https://www.googleapis.com/auth/drive.metadata.readonly",
+            "https://www.googleapis.com/auth/drive.file",
+        ],
+    },
+    "sheets": {
+        "label": "Google Sheets",
+        "description": "Create and export productivity reports as spreadsheets.",
+        "scopes": [
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive.metadata.readonly",
+        ],
+    },
+    "tasks": {
+        "label": "Google Tasks",
+        "description": "See, add, and complete tasks without leaving MyLife.",
+        "scopes": ["https://www.googleapis.com/auth/tasks"],
+    },
+}
 
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -33,15 +69,18 @@ def google_configured() -> bool:
     return bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
 
 
-def build_auth_url() -> str:
+def build_auth_url(scopes=None, state: str = "") -> str:
     from urllib.parse import urlencode
 
+    requested_scopes = scopes or IDENTITY_SCOPES
     return AUTH_URL + "?" + urlencode({
         "client_id": GOOGLE_CLIENT_ID,
         "redirect_uri": GOOGLE_REDIRECT_URI,
         "response_type": "code",
-        "scope": " ".join(SCOPES),
+        "scope": " ".join(requested_scopes),
+        "state": state,
         "access_type": "offline",
+        "include_granted_scopes": "true",
         "prompt": "consent",
     })
 
@@ -104,6 +143,42 @@ def authed_get(user: dict, url: str, params: dict = None) -> tuple:
         resp = requests.get(url, params=params, headers=headers, timeout=60)
     resp.raise_for_status()
     return resp.json(), access
+
+
+def _authed_mutation(user: dict, method: str, url: str, json_body: dict = None) -> tuple:
+    """POST/PATCH with one refresh retry. Returns (json_data, access_token_used)."""
+    access = user.get("google_access_token")
+    refresh = user.get("google_refresh_token")
+    if not access and not refresh:
+        raise ValueError("Google account is not connected.")
+    if not access:
+        access = refresh_access(refresh)
+
+    headers = {"Authorization": f"Bearer {access}", "Content-Type": "application/json"}
+    resp = requests.request(method, url, headers=headers, json=json_body, timeout=60)
+    if resp.status_code == 401 and refresh:
+        access = refresh_access(refresh)
+        headers["Authorization"] = f"Bearer {access}"
+        resp = requests.request(method, url, headers=headers, json=json_body, timeout=60)
+    resp.raise_for_status()
+    return resp.json() if resp.content else {}, access
+
+
+def authed_post(user: dict, url: str, json_body: dict = None) -> tuple:
+    return _authed_mutation(user, "POST", url, json_body)
+
+
+def authed_patch(user: dict, url: str, json_body: dict = None) -> tuple:
+    return _authed_mutation(user, "PATCH", url, json_body)
+
+
+def revoke_token(token: str) -> None:
+    if not token:
+        return
+    resp = requests.post("https://oauth2.googleapis.com/revoke", params={"token": token}, timeout=30)
+    # A token can already be revoked; local credentials still must be cleared.
+    if resp.status_code not in (200, 400):
+        resp.raise_for_status()
 
 
 # ---------- Google Sheets ----------
@@ -314,3 +389,83 @@ def list_calendar_events(user: dict, max_results: int = 20) -> list:
     }
     data, _ = authed_get(user, "https://www.googleapis.com/calendar/v3/calendars/primary/events", params=params)
     return data.get("items", [])
+
+
+def create_calendar_event(user: dict, title: str, start: str, end: str, description: str = "") -> tuple:
+    event, access = authed_post(
+        user,
+        "https://www.googleapis.com/calendar/v3/calendars/primary/events",
+        {
+            "summary": title,
+            "description": description,
+            "start": {"dateTime": start},
+            "end": {"dateTime": end},
+        },
+    )
+    return event, access
+
+
+# ---------- Google Tasks ----------
+
+def _default_task_list(user: dict) -> tuple:
+    lists, access = authed_get(
+        user,
+        "https://tasks.googleapis.com/tasks/v1/users/@me/lists",
+        params={"maxResults": 100},
+    )
+    items = lists.get("items", [])
+    if items:
+        return items[0]["id"], access
+    created, access = authed_post(
+        user,
+        "https://tasks.googleapis.com/tasks/v1/users/@me/lists",
+        {"title": "My Tasks"},
+    )
+    return created["id"], access
+
+
+def list_google_tasks(user: dict, max_results: int = 100) -> tuple:
+    task_list_id, _ = _default_task_list(user)
+    data, access = authed_get(
+        user,
+        f"https://tasks.googleapis.com/tasks/v1/lists/{task_list_id}/tasks",
+        params={"maxResults": min(max_results, 100), "showCompleted": True},
+    )
+    tasks = []
+    for item in data.get("items", []):
+        tasks.append({
+            "id": item["id"],
+            "task_list_id": task_list_id,
+            "title": item.get("title", "Untitled task"),
+            "notes": item.get("notes", ""),
+            "due": item.get("due"),
+            "status": item.get("status", "needsAction"),
+            "updated": item.get("updated"),
+        })
+    return tasks, access
+
+
+def create_google_task(user: dict, title: str, notes: str = "", due: str = None) -> tuple:
+    task_list_id, _ = _default_task_list(user)
+    body = {"title": title}
+    if notes:
+        body["notes"] = notes
+    if due:
+        body["due"] = due
+    task, access = authed_post(
+        user,
+        f"https://tasks.googleapis.com/tasks/v1/lists/{task_list_id}/tasks",
+        body,
+    )
+    task["task_list_id"] = task_list_id
+    return task, access
+
+
+def complete_google_task(user: dict, task_list_id: str, task_id: str, completed: bool) -> tuple:
+    task, access = authed_patch(
+        user,
+        f"https://tasks.googleapis.com/tasks/v1/lists/{task_list_id}/tasks/{task_id}",
+        {"status": "completed" if completed else "needsAction"},
+    )
+    task["task_list_id"] = task_list_id
+    return task, access

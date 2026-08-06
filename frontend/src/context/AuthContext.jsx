@@ -36,9 +36,19 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search)
     const googleToken = params.get('google_token')
+    const googleProductConnected = params.get('google_connected')
     const cleanUrl = () => window.history.replaceState({}, '', window.location.pathname)
 
     async function handleGoogleToken() {
+      if (googleProductConnected) {
+        cleanUrl()
+        if (window.opener) {
+          window.opener.focus()
+          window.close()
+        }
+        setLoading(false)
+        return
+      }
       if (!googleToken) {
         setLoading(false)
         return
