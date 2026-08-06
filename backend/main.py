@@ -2,7 +2,8 @@ import threading
 import time
 import json
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from dotenv import load_dotenv
 import os
@@ -10,7 +11,7 @@ import os
 load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
 import pandas as pd
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, Depends, HTTPException, Query, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -23,7 +24,7 @@ from models import (
     TodoCreate, TodoUpdate, TodoResponse,
     WorkLogCreate, WorkLogUpdate, WorkLogResponse,
     ScheduleCreate, ScheduleUpdate, ScheduleResponse,
-    RegisterRequest, LoginRequest, EmailSettings,
+    RegisterRequest, LoginRequest, EmailSettings, AutomationSettings,
     GoogleTaskCreate, GoogleTaskUpdate, GoogleCalendarEventCreate,
 )
 import google_integration as gi
@@ -31,6 +32,7 @@ from notify import send_smtp, send_smtp_test
 from rate_limit import rate_limit
 
 app = FastAPI(title="MyLife Productivity Dashboard API")
+CRON_SECRET = os.environ.get("CRON_SECRET", "")
 
 
 @app.get("/health")
@@ -381,6 +383,7 @@ def create_todo(item: TodoCreate, user: dict = Depends(get_current_user)):
     c.execute("SELECT * FROM todos WHERE id = ?", (row_id,))
     result = dict(c.fetchone())
     conn.close()
+    _queue_todo_google_sync(user, result, "upsert")
     return result
 
 
@@ -404,6 +407,7 @@ def update_todo(todo_id: int, item: TodoUpdate, user: dict = Depends(get_current
     c.execute("SELECT * FROM todos WHERE id = ?", (todo_id,))
     result = dict(c.fetchone())
     conn.close()
+    _queue_todo_google_sync(user, result, "upsert")
     return result
 
 
@@ -411,12 +415,19 @@ def update_todo(todo_id: int, item: TodoUpdate, user: dict = Depends(get_current
 def delete_todo(todo_id: int, user: dict = Depends(get_current_user)):
     conn = get_db()
     c = conn.cursor()
+    c.execute("SELECT * FROM todos WHERE id = ? AND user_id = ?", (todo_id, user["id"]))
+    todo = c.fetchone()
+    if not todo:
+        conn.close()
+        raise HTTPException(404, "Todo not found")
+    todo = dict(todo)
     c.execute("DELETE FROM todos WHERE id = ? AND user_id = ?", (todo_id, user["id"]))
     conn.commit()
     affected = c.rowcount
     conn.close()
     if affected == 0:
         raise HTTPException(404, "Todo not found")
+    _queue_todo_google_sync(user, todo, "delete")
     return {"detail": "Deleted"}
 
 
@@ -901,19 +912,14 @@ def disconnect_google(user: dict = Depends(get_current_user)):
     return {"status": "ok"}
 
 
-@app.post("/sync/sheets")
-def sync_sheets(
-    data_type: str = "all",
-    period: str = "monthly",
-    user: dict = Depends(get_current_user),
-):
+def _sync_sheets_for_user(user: dict, data_type: str = "all", period: str = "monthly") -> dict:
     if not gi.google_configured():
-        raise HTTPException(400, "Google is not configured on the server. Add GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET.")
+        raise ValueError("Google is not configured on the server. Add GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET.")
     _require_google_product(user, "sheets")
     try:
         access = gi._authed_access(user)
     except Exception as e:
-        raise HTTPException(400, f"Google account not connected or token invalid: {e}")
+        raise ValueError(f"Google account not connected or token invalid: {e}") from e
 
     today = datetime.now()
     start, end = _date_range(period, today)
@@ -945,20 +951,35 @@ def sync_sheets(
             if len(values) > 1:
                 gi.write_sheet_values(access, spreadsheet_id, f"{label}!A1", values)
     except Exception as e:
-        raise HTTPException(500, f"Google Sheets sync failed: {e}")
+        raise RuntimeError(f"Google Sheets sync failed: {e}") from e
 
     return {"status": "ok", "spreadsheet_url": spreadsheet_url, "spreadsheet_title": title}
 
 
-@app.post("/sync/drive")
-def sync_drive(period: str = "monthly", user: dict = Depends(get_current_user)):
+@app.post("/sync/sheets")
+def sync_sheets(
+    data_type: str = "all",
+    period: str = "monthly",
+    user: dict = Depends(get_current_user),
+):
+    try:
+        return _sync_sheets_for_user(user, data_type, period)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+def _backup_drive_for_user(user: dict, period: str = "monthly") -> dict:
     if not gi.google_configured():
-        raise HTTPException(400, "Google is not configured on the server.")
+        raise ValueError("Google is not configured on the server.")
     _require_google_product(user, "drive")
     try:
         access = gi._authed_access(user)
     except Exception as e:
-        raise HTTPException(400, f"Google account not connected or token invalid: {e}")
+        raise ValueError(f"Google account not connected or token invalid: {e}") from e
 
     today = datetime.now()
     start, end = _date_range(period, today)
@@ -979,7 +1000,7 @@ def sync_drive(period: str = "monthly", user: dict = Depends(get_current_user)):
             "application/pdf", pdf_content, folder_id,
         )
     except Exception as e:
-        raise HTTPException(500, f"Google Drive backup failed: {e}")
+        raise RuntimeError(f"Google Drive backup failed: {e}") from e
 
     return {
         "status": "ok",
@@ -987,6 +1008,18 @@ def sync_drive(period: str = "monthly", user: dict = Depends(get_current_user)):
         "excel_link": excel_file.get("webViewLink"),
         "pdf_link": pdf_file.get("webViewLink"),
     }
+
+
+@app.post("/sync/drive")
+def sync_drive(period: str = "monthly", user: dict = Depends(get_current_user)):
+    try:
+        return _backup_drive_for_user(user, period)
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, str(e))
 
 
 # ============================================================
@@ -1139,13 +1172,127 @@ def google_tasks_update(task_list_id: str, task_id: str, item: GoogleTaskUpdate,
         _google_error(e)
 
 
+def _todo_google_sync_enabled(user_id: int) -> bool:
+    """Treat sync as enabled by default; it only runs after Tasks is connected."""
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT todo_google_sync FROM user_settings WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    return not row or bool(row["todo_google_sync"])
+
+
+def _google_task_due(due_date: str = None) -> str:
+    if not due_date:
+        return None
+    # Local to-dos use a calendar date. Google Tasks expects RFC 3339.
+    return due_date if "T" in due_date else f"{due_date}T00:00:00.000Z"
+
+
+def _todo_google_task_notes(todo: dict) -> str:
+    parts = ["Synced from MyLife Productivity Dashboard.", f"Priority: {todo.get('priority') or 'medium'}"]
+    if todo.get("description"):
+        parts.append(str(todo["description"]))
+    return "\n\n".join(parts)
+
+
+def _sync_local_todo_to_google(user: dict, todo: dict, action: str = "upsert") -> str:
+    """Best-effort one-way mirror from the local to-do list to Google Tasks."""
+    if not gi.google_configured() or "tasks" not in _enabled_google_products(user):
+        return "skipped"
+
+    task_id = todo.get("google_task_id")
+    task_list_id = todo.get("google_task_list_id")
+    try:
+        if action == "delete":
+            if task_id and task_list_id:
+                _, access = gi.delete_google_task(user, task_list_id, task_id)
+                _persist_google_token(user, access)
+                return "deleted"
+            return "skipped"
+
+        due = _google_task_due(todo.get("due_date"))
+        notes = _todo_google_task_notes(todo)
+        if task_id and task_list_id:
+            _, access = gi.update_google_task(
+                user, task_list_id, task_id, todo["title"], notes, due, bool(todo.get("completed")),
+            )
+            _persist_google_token(user, access)
+            return "updated"
+
+        task, access = gi.create_google_task(user, todo["title"], notes, due)
+        _persist_google_token(user, access)
+        conn = get_db()
+        c = conn.cursor()
+        c.execute(
+            "UPDATE todos SET google_task_id = ?, google_task_list_id = ? WHERE id = ? AND user_id = ?",
+            (task.get("id"), task.get("task_list_id"), todo["id"], user["id"]),
+        )
+        conn.commit()
+        conn.close()
+        return "created"
+    except Exception:
+        # A Google outage must never prevent someone from saving a local to-do.
+        return "failed"
+
+
+def _queue_todo_google_sync(user: dict, todo: dict, action: str) -> None:
+    if "tasks" not in _enabled_google_products(user) or not _todo_google_sync_enabled(user["id"]):
+        return
+    threading.Thread(
+        target=_sync_local_todo_to_google,
+        args=(dict(user), dict(todo), action),
+        daemon=True,
+    ).start()
+
+
+def _sync_all_local_todos_to_google(user: dict) -> dict:
+    if not gi.google_configured():
+        raise ValueError("Google is not configured on the server.")
+    _require_google_product(user, "tasks")
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM todos WHERE user_id = ? ORDER BY id", (user["id"],))
+    todos = [dict(row) for row in c.fetchall()]
+    conn.close()
+
+    result = {"created": 0, "updated": 0, "failed": 0, "skipped": 0}
+    for todo in todos:
+        outcome = _sync_local_todo_to_google(user, todo)
+        result[outcome] = result.get(outcome, 0) + 1
+    result["total"] = len(todos)
+    return result
+
+
+@app.post("/sync/tasks")
+def sync_local_todos_to_google(user: dict = Depends(get_current_user)):
+    """Mirror all existing local to-dos after Google Tasks is first enabled."""
+    try:
+        return {"status": "ok", **_sync_all_local_todos_to_google(user)}
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 # ============================================================
 # EMAIL NOTIFICATIONS
 # ============================================================
 
-@app.post("/notify/report")
-def notify_report(period: str = "daily", user: dict = Depends(get_current_user)):
+def _deliver_report(user: dict, period: str = "daily") -> dict:
+    if period not in ("daily", "weekly", "monthly", "yearly"):
+        raise ValueError("Unsupported report period.")
+
     to = user.get("google_email") or user.get("email")
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM user_settings WHERE user_id = ?", (user["id"],))
+    settings = c.fetchone()
+    conn.close()
+    settings = dict(settings) if settings else None
+    if settings and settings.get("recipient"):
+        to = settings["recipient"]
+
     today = datetime.now()
     start, end = _date_range(period, today)
     subject = f"MyLife {period.capitalize()} Report - {today.strftime('%Y-%m-%d')}"
@@ -1155,26 +1302,26 @@ def notify_report(period: str = "daily", user: dict = Depends(get_current_user))
                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
     if "gmail" in _enabled_google_products(user):
-        try:
-            access = gi._authed_access(user)
-            gi.send_gmail(access, to, subject, body_html, attachment)
-            return {"status": "ok", "sent_to": to, "method": "gmail"}
-        except Exception as e:
-            raise HTTPException(500, f"Gmail send failed: {e}")
+        access = gi._authed_access(user)
+        gi.send_gmail(access, to, subject, body_html, attachment)
+        _persist_google_token(user, access)
+        return {"status": "ok", "sent_to": to, "method": "gmail"}
 
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT * FROM user_settings WHERE user_id = ?", (user["id"],))
-    settings = c.fetchone()
-    conn.close()
     if settings and settings["smtp_host"]:
-        try:
-            send_smtp(dict(settings), to, subject, body_html, attachment)
-            return {"status": "ok", "sent_to": to, "method": "smtp"}
-        except Exception as e:
-            raise HTTPException(500, f"SMTP send failed: {e}")
+        send_smtp(settings, to, subject, body_html, attachment)
+        return {"status": "ok", "sent_to": to, "method": "smtp"}
 
-    raise HTTPException(400, "No delivery method configured. Connect Google or set SMTP in Settings.")
+    raise ValueError("No delivery method configured. Add Gmail in My Google or set SMTP in Settings.")
+
+
+@app.post("/notify/report")
+def notify_report(period: str = "daily", user: dict = Depends(get_current_user)):
+    try:
+        return _deliver_report(user, period)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Report send failed: {e}")
 
 
 @app.post("/notify/test")
@@ -1241,8 +1388,210 @@ def get_email_settings(user: dict = Depends(get_current_user)):
     return dict(row)
 
 
+AUTOMATION_DEFAULTS = {
+    "weekly_report": 0,
+    "weekly_report_day": 0,
+    "weekly_report_time": "09:00",
+    "weekly_timezone": "UTC",
+    "auto_sync_sheets": 0,
+    "auto_sync_drive": 0,
+    "auto_sync_tasks": 0,
+    "todo_google_sync": 1,
+    "weekly_automation_last_run": None,
+}
+
+
+def _time_parts(value: str) -> tuple:
+    """Validate HH:MM values before using them in a background scheduler."""
+    try:
+        hour, minute = str(value or "").split(":", 1)
+        hour, minute = int(hour), int(minute)
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return hour, minute
+    except (TypeError, ValueError):
+        pass
+    raise ValueError("Time must use the HH:MM format.")
+
+
+def _weekly_local_time(settings: dict, now: datetime = None) -> datetime:
+    """Convert the scheduler's UTC clock into the user's selected IANA zone."""
+    try:
+        zone = ZoneInfo(settings.get("weekly_timezone") or "UTC")
+    except ZoneInfoNotFoundError as e:
+        raise ValueError("Choose a valid IANA timezone, for example America/Los_Angeles.") from e
+    now = now or datetime.now(timezone.utc)
+    # Tests and internal callers may pass a local naive time intentionally.
+    if now.tzinfo is None:
+        return now.replace(tzinfo=zone)
+    return now.astimezone(zone)
+
+
+def _get_automation_settings(user_id: int) -> dict:
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM user_settings WHERE user_id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    settings = dict(AUTOMATION_DEFAULTS)
+    if row:
+        source = dict(row)
+        for key in settings:
+            if source.get(key) is not None:
+                settings[key] = source[key]
+    return settings
+
+
+@app.get("/settings/automation")
+def get_automation_settings(user: dict = Depends(get_current_user)):
+    return _get_automation_settings(user["id"])
+
+
+@app.put("/settings/automation")
+def update_automation_settings(
+    settings: AutomationSettings,
+    user: dict = Depends(get_current_user),
+):
+    if settings.weekly_report_day not in range(7):
+        raise HTTPException(400, "Choose a valid day for the weekly automation.")
+    try:
+        _time_parts(settings.weekly_report_time)
+        _weekly_local_time({"weekly_timezone": settings.weekly_timezone})
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    values = (
+        int(bool(settings.weekly_report)),
+        settings.weekly_report_day,
+        settings.weekly_report_time,
+        settings.weekly_timezone,
+        int(bool(settings.auto_sync_sheets)),
+        int(bool(settings.auto_sync_drive)),
+        int(bool(settings.auto_sync_tasks)),
+        int(bool(settings.todo_google_sync)),
+    )
+    conn = get_db()
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO user_settings
+           (user_id, weekly_report, weekly_report_day, weekly_report_time,
+            weekly_timezone, auto_sync_sheets, auto_sync_drive, auto_sync_tasks, todo_google_sync)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(user_id) DO UPDATE SET
+             weekly_report=excluded.weekly_report,
+             weekly_report_day=excluded.weekly_report_day,
+             weekly_report_time=excluded.weekly_report_time,
+             weekly_timezone=excluded.weekly_timezone,
+             auto_sync_sheets=excluded.auto_sync_sheets,
+             auto_sync_drive=excluded.auto_sync_drive,
+             auto_sync_tasks=excluded.auto_sync_tasks,
+             todo_google_sync=excluded.todo_google_sync""",
+        (user["id"], *values),
+    )
+    conn.commit()
+    conn.close()
+    return {"status": "ok", **_get_automation_settings(user["id"])}
+
+
+def _weekly_automation_is_due(settings: dict, now: datetime) -> bool:
+    now = _weekly_local_time(settings, now)
+    if now.weekday() != int(settings.get("weekly_report_day") or 0):
+        return False
+    hour, minute = _time_parts(settings.get("weekly_report_time"))
+    if (now.hour, now.minute) < (hour, minute):
+        return False
+    return not str(settings.get("weekly_automation_last_run") or "").startswith(now.strftime("%Y-%m-%d"))
+
+
+def _get_user_for_automation(user_id: int) -> dict:
+    conn = get_db()
+    c = conn.cursor()
+    c.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+    row = c.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def _run_user_weekly_automation(
+    user_id: int,
+    force: bool = False,
+    record_run: bool = True,
+    now: datetime = None,
+) -> dict:
+    now = now or datetime.now(timezone.utc)
+    settings = _get_automation_settings(user_id)
+    local_now = _weekly_local_time(settings, now)
+    selected = [
+        key for key in ("weekly_report", "auto_sync_sheets", "auto_sync_drive", "auto_sync_tasks")
+        if settings.get(key)
+    ]
+    if not selected:
+        return {"status": "not_configured", "results": {}}
+    if not force and not _weekly_automation_is_due(settings, now):
+        return {"status": "not_due", "results": {}}
+
+    user = _get_user_for_automation(user_id)
+    if not user:
+        return {"status": "missing_user", "results": {}}
+
+    enabled_products = _enabled_google_products(user)
+    results = {}
+
+    def run_product(key: str, product: str, action):
+        if not settings.get(key):
+            return
+        if product not in enabled_products:
+            results[key] = {"status": "skipped", "reason": f"Enable {product} in My Google first."}
+            return
+        try:
+            results[key] = {"status": "ok", "data": action()}
+        except Exception as e:
+            results[key] = {"status": "failed", "reason": str(e)}
+
+    run_product("auto_sync_sheets", "sheets", lambda: _sync_sheets_for_user(user, "all", "weekly"))
+    run_product("auto_sync_drive", "drive", lambda: _backup_drive_for_user(user, "weekly"))
+    run_product("auto_sync_tasks", "tasks", lambda: _sync_all_local_todos_to_google(user))
+
+    if settings.get("weekly_report"):
+        try:
+            results["weekly_report"] = {"status": "ok", "data": _deliver_report(user, "weekly")}
+        except Exception as e:
+            results["weekly_report"] = {"status": "failed", "reason": str(e)}
+
+    if record_run:
+        conn = get_db()
+        c = conn.cursor()
+        c.execute(
+            "UPDATE user_settings SET weekly_automation_last_run = ? WHERE user_id = ?",
+            (local_now.strftime("%Y-%m-%d %H:%M"), user_id),
+        )
+        conn.commit()
+        conn.close()
+    return {"status": "ok", "results": results}
+
+
+def _run_scheduled_weekly_automations(now: datetime = None) -> list:
+    conn = get_db()
+    c = conn.cursor()
+    c.execute(
+        """SELECT user_id FROM user_settings
+           WHERE weekly_report = 1 OR auto_sync_sheets = 1
+              OR auto_sync_drive = 1 OR auto_sync_tasks = 1"""
+    )
+    user_ids = [row["user_id"] for row in c.fetchall()]
+    conn.close()
+    return [_run_user_weekly_automation(user_id, now=now) for user_id in user_ids]
+
+
+@app.post("/automation/run")
+def run_weekly_automation_now(user: dict = Depends(get_current_user)):
+    result = _run_user_weekly_automation(user["id"], force=True, record_run=False)
+    if result["status"] == "not_configured":
+        raise HTTPException(400, "Choose at least one weekly automation, then save your settings.")
+    return result
+
+
 # ============================================================
-# DAILY REPORT SCHEDULER
+# REPORT & WEEKLY AUTOMATION SCHEDULER
 # ============================================================
 
 def _scheduler_loop():
@@ -1253,53 +1602,31 @@ def _scheduler_loop():
             c.execute("SELECT * FROM user_settings WHERE daily_report = 1")
             rows = c.fetchall()
             conn.close()
-            now = datetime.now()
+            now = datetime.now(timezone.utc)
             today = now.strftime("%Y-%m-%d")
 
             for row in rows:
                 s = dict(row)
                 try:
-                    report_hour, report_min = s["report_time"].split(":")
-                    scheduled = today + " " + report_hour + ":" + report_min
+                    report_hour, report_min = _time_parts(s["report_time"])
+                    scheduled = f"{today} {report_hour:02d}:{report_min:02d}"
                     last = s.get("report_last_sent") or ""
                     if now.strftime("%Y-%m-%d %H:%M") >= scheduled and not last.startswith(today):
                         _send_daily_report(s["user_id"])
                 except Exception:
                     continue
+            _run_scheduled_weekly_automations(now)
         except Exception:
             pass
         time.sleep(60)
 
 
 def _send_daily_report(user_id: int):
-    conn = get_db()
-    c = conn.cursor()
-    c.execute("SELECT * FROM users WHERE id = ?", (user_id,))
-    user = dict(c.fetchone())
-    conn.close()
-
-    today = datetime.now()
-    start, end = _date_range("daily", today)
-    subject = f"MyLife Daily Report - {today.strftime('%Y-%m-%d')}"
-    body_html = build_email_html(user_id, start, end, "daily")
-    excel_bytes = build_excel_bytes(user_id, start, end, "all")
-    attachment = (f"mylife_daily_{today.strftime('%Y-%m-%d')}.xlsx", excel_bytes,
-                  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    to = user.get("google_email") or user.get("email")
-
+    user = _get_user_for_automation(user_id)
+    if not user:
+        return
     try:
-        if "gmail" in _enabled_google_products(user):
-            access = gi._authed_access(user)
-            gi.send_gmail(access, to, subject, body_html, attachment)
-        else:
-            conn = get_db()
-            c = conn.cursor()
-            c.execute("SELECT * FROM user_settings WHERE user_id = ?", (user_id,))
-            settings = c.fetchone()
-            conn.close()
-            if not settings or not settings["smtp_host"]:
-                return
-            send_smtp(dict(settings), to, subject, body_html, attachment)
+        _deliver_report(user, "daily")
     except Exception:
         return
 
@@ -1316,6 +1643,18 @@ def _send_daily_report(user_id: int):
 def _start_scheduler():
     t = threading.Thread(target=_scheduler_loop, daemon=True)
     t.start()
+
+
+@app.post("/cron/automations")
+def run_scheduled_automations_from_cron(
+    x_cron_secret: str = Header(default="", alias="X-Cron-Secret"),
+):
+    """Protected entry point for a Render Cron Job or another scheduler."""
+    if not CRON_SECRET or not secrets.compare_digest(x_cron_secret, CRON_SECRET):
+        # Returning 404 avoids exposing a scheduler endpoint to random callers.
+        raise HTTPException(404, "Not found")
+    runs = _run_scheduled_weekly_automations()
+    return {"status": "ok", "runs": runs}
 
 
 # ============================================================

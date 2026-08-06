@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import {
   User, LogOut, Cloud, Table2, HardDrive, Mail, Send,
-  CheckCircle2, RefreshCw, Loader2, AlarmClock, Eye,
+  CheckCircle2, RefreshCw, Loader2, AlarmClock, Eye, ClipboardCheck,
   Contrast, Type, MousePointerClick, Pause, Volume2, Palette,
   ShieldCheck, SlidersHorizontal,
 } from 'lucide-react'
@@ -10,8 +10,13 @@ import { useUISettings, THEMES } from '../context/SettingsContext'
 import {
   getGoogleProducts, getSyncStatus, syncSheets, syncDrive,
   sendReportEmail, sendTestEmail, getEmailSettings, saveEmailSettings,
+  syncLocalTodosToGoogle, getAutomationSettings, saveAutomationSettings, runWeeklyAutomation,
 } from '../utils/api'
 import { getGoogleProductIcon, GOOGLE_PRODUCT_ACCENTS } from '../constants/googleProducts'
+
+const browserTimeZone = typeof Intl === 'undefined'
+  ? 'UTC'
+  : Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
 
 export default function SettingsPage({ onOpenGoogle }) {
   const { user, logout } = useAuth()
@@ -34,10 +39,21 @@ export default function SettingsPage({ onOpenGoogle }) {
     smtp_host: '', smtp_port: 587, smtp_user: '', smtp_password: '',
     daily_report: 0, report_time: '18:00',
   })
+  const [automationCfg, setAutomationCfg] = useState({
+    weekly_report: 0,
+    weekly_report_day: 0,
+    weekly_report_time: '09:00',
+    weekly_timezone: browserTimeZone,
+    auto_sync_sheets: 0,
+    auto_sync_drive: 0,
+    auto_sync_tasks: 0,
+    todo_google_sync: 1,
+  })
 
   useEffect(() => {
     loadStatus()
     loadEmailSettings()
+    loadAutomationSettings()
   }, [])
 
   async function loadStatus({ announce = false } = {}) {
@@ -74,6 +90,22 @@ export default function SettingsPage({ onOpenGoogle }) {
       const res = await getEmailSettings()
       setEmailCfg((c) => ({ ...c, ...res.data }))
     } catch (e) { /* ignore */ }
+  }
+
+  async function loadAutomationSettings() {
+    try {
+      const res = await getAutomationSettings()
+      const hasSavedAutomation = Boolean(
+        res.data.weekly_report || res.data.auto_sync_sheets || res.data.auto_sync_drive ||
+        res.data.auto_sync_tasks || res.data.weekly_automation_last_run ||
+        (res.data.weekly_timezone && res.data.weekly_timezone !== 'UTC')
+      )
+      setAutomationCfg((c) => ({
+        ...c,
+        ...res.data,
+        weekly_timezone: hasSavedAutomation ? (res.data.weekly_timezone || browserTimeZone) : browserTimeZone,
+      }))
+    } catch (e) { /* Settings remain usable with safe opt-in defaults. */ }
   }
 
   function flash(message) {
@@ -146,11 +178,61 @@ export default function SettingsPage({ onOpenGoogle }) {
     setBusy('')
   }
 
+  async function handleSaveAutomation() {
+    setBusy('automation-save')
+    setError('')
+    try {
+      const res = await saveAutomationSettings({
+        ...automationCfg,
+        weekly_report: automationCfg.weekly_report ? 1 : 0,
+        weekly_report_day: Number(automationCfg.weekly_report_day),
+        weekly_timezone: automationCfg.weekly_timezone || browserTimeZone,
+        auto_sync_sheets: automationCfg.auto_sync_sheets ? 1 : 0,
+        auto_sync_drive: automationCfg.auto_sync_drive ? 1 : 0,
+        auto_sync_tasks: automationCfg.auto_sync_tasks ? 1 : 0,
+        todo_google_sync: automationCfg.todo_google_sync ? 1 : 0,
+      })
+      setAutomationCfg((c) => ({ ...c, ...res.data }))
+      flash('Weekly Google automation saved.')
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Could not save weekly automation settings.')
+    }
+    setBusy('')
+  }
+
+  async function handleSyncTodos() {
+    setBusy('tasks-sync')
+    setError('')
+    try {
+      const res = await syncLocalTodosToGoogle()
+      flash(`Google Tasks updated: ${res.data.created} added, ${res.data.updated} refreshed.`)
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Could not sync local to-dos to Google Tasks.')
+    }
+    setBusy('')
+  }
+
+  async function handleRunWeeklyAutomation() {
+    setBusy('automation-run')
+    setError('')
+    try {
+      const res = await runWeeklyAutomation()
+      const completed = Object.values(res.data.results || {}).filter((item) => item.status === 'ok').length
+      flash(completed ? `Weekly automation completed ${completed} action${completed === 1 ? '' : 's'}.` : 'Weekly automation finished. Review the connected Google tools and delivery settings.')
+    } catch (e) {
+      setError(e.response?.data?.detail || 'Could not run the weekly automation.')
+    }
+    setBusy('')
+  }
+
   const googleAccountLinked = syncStatus?.google_account_linked
   const serverConfigured = syncStatus?.google_configured_server
   const googleStatusKnown = Boolean(syncStatus)
   const enabledGoogleProducts = syncStatus?.products || []
   const gmailEnabled = enabledGoogleProducts.includes('gmail')
+  const sheetsEnabled = enabledGoogleProducts.includes('sheets')
+  const driveEnabled = enabledGoogleProducts.includes('drive')
+  const tasksEnabled = enabledGoogleProducts.includes('tasks')
 
   const THEME_SWATCHES = {
     midnight: 'linear-gradient(135deg, #0f172a, #1e3a5f)',
@@ -314,6 +396,97 @@ export default function SettingsPage({ onOpenGoogle }) {
                 )}
               </div>
             )}
+
+            <div className="settings-block automation-settings">
+              <div className="automation-heading">
+                <div>
+                  <p className="section-eyebrow">Set it once</p>
+                  <h4><AlarmClock size={16} /> Weekly Google automation</h4>
+                  <p>Choose what MyLife should save and deliver each week. Nothing runs until you save an option below.</p>
+                </div>
+                <button className="btn btn-outline" onClick={handleRunWeeklyAutomation} disabled={busy === 'automation-run'}>
+                  {busy === 'automation-run' ? <Loader2 size={16} className="spin" /> : <RefreshCw size={16} />}
+                  Run weekly automation now
+                </button>
+              </div>
+
+              <div className="form-row automation-schedule-row">
+                <div className="form-group" style={{ maxWidth: 200 }}>
+                  <label>Every</label>
+                  <select value={automationCfg.weekly_report_day} onChange={(e) => setAutomationCfg({ ...automationCfg, weekly_report_day: Number(e.target.value) })}>
+                    <option value={0}>Monday</option>
+                    <option value={1}>Tuesday</option>
+                    <option value={2}>Wednesday</option>
+                    <option value={3}>Thursday</option>
+                    <option value={4}>Friday</option>
+                    <option value={5}>Saturday</option>
+                    <option value={6}>Sunday</option>
+                  </select>
+                </div>
+                <div className="form-group" style={{ maxWidth: 200 }}>
+                  <label>At</label>
+                  <input type="time" value={automationCfg.weekly_report_time} onChange={(e) => setAutomationCfg({ ...automationCfg, weekly_report_time: e.target.value })} />
+                </div>
+                <div className="form-group" style={{ minWidth: 240 }}>
+                  <label>Timezone</label>
+                  <input list="timezone-options" value={automationCfg.weekly_timezone} onChange={(e) => setAutomationCfg({ ...automationCfg, weekly_timezone: e.target.value })} placeholder={browserTimeZone} />
+                  <datalist id="timezone-options">
+                    <option value={browserTimeZone} />
+                    <option value="UTC" />
+                    <option value="America/Los_Angeles" />
+                    <option value="America/New_York" />
+                    <option value="Europe/London" />
+                    <option value="Europe/Berlin" />
+                    <option value="Asia/Kolkata" />
+                    <option value="Asia/Singapore" />
+                    <option value="Asia/Tokyo" />
+                    <option value="Australia/Sydney" />
+                  </datalist>
+                </div>
+              </div>
+
+              <div className="automation-option-grid">
+                <label className={`automation-option ${automationCfg.auto_sync_sheets ? 'is-on' : ''}`}>
+                  <input type="checkbox" checked={Boolean(automationCfg.auto_sync_sheets)} onChange={(e) => setAutomationCfg({ ...automationCfg, auto_sync_sheets: e.target.checked ? 1 : 0 })} />
+                  <Table2 size={18} />
+                  <span><strong>Save all data to Sheets</strong><small>{sheetsEnabled ? 'Creates a weekly spreadsheet with spending, tasks, work, and schedule.' : 'Add Google Sheets in My Google to activate this.'}</small></span>
+                </label>
+                <label className={`automation-option ${automationCfg.auto_sync_drive ? 'is-on' : ''}`}>
+                  <input type="checkbox" checked={Boolean(automationCfg.auto_sync_drive)} onChange={(e) => setAutomationCfg({ ...automationCfg, auto_sync_drive: e.target.checked ? 1 : 0 })} />
+                  <HardDrive size={18} />
+                  <span><strong>Archive Excel + PDF in Drive</strong><small>{driveEnabled ? 'Saves a weekly backup inside MyLife Productivity Backups.' : 'Add Google Drive in My Google to activate this.'}</small></span>
+                </label>
+                <label className={`automation-option ${automationCfg.auto_sync_tasks ? 'is-on' : ''}`}>
+                  <input type="checkbox" checked={Boolean(automationCfg.auto_sync_tasks)} onChange={(e) => setAutomationCfg({ ...automationCfg, auto_sync_tasks: e.target.checked ? 1 : 0 })} />
+                  <ClipboardCheck size={18} />
+                  <span><strong>Catch up all local to-dos</strong><small>{tasksEnabled ? 'Refreshes all existing MyLife to-dos in Google Tasks each week.' : 'Add Google Tasks in My Google to activate this.'}</small></span>
+                </label>
+                <label className={`automation-option ${automationCfg.weekly_report ? 'is-on' : ''}`}>
+                  <input type="checkbox" checked={Boolean(automationCfg.weekly_report)} onChange={(e) => setAutomationCfg({ ...automationCfg, weekly_report: e.target.checked ? 1 : 0 })} />
+                  <Mail size={18} />
+                  <span><strong>Email my weekly analysis</strong><small>{gmailEnabled ? 'Sends the report through your connected Gmail account.' : 'Uses SMTP if configured, or add Gmail in My Google.'}</small></span>
+                </label>
+              </div>
+
+              <div className="automation-todo-row">
+                <label className="automation-inline-option">
+                  <input type="checkbox" checked={Boolean(automationCfg.todo_google_sync)} onChange={(e) => setAutomationCfg({ ...automationCfg, todo_google_sync: e.target.checked ? 1 : 0 })} />
+                  <span><strong>Mirror new to-dos immediately</strong><small>{tasksEnabled ? 'New, completed, edited, and deleted MyLife tasks are kept aligned with Google Tasks.' : 'Connect Google Tasks first; your preference will be remembered.'}</small></span>
+                </label>
+                <button className="btn btn-outline" onClick={handleSyncTodos} disabled={!tasksEnabled || busy === 'tasks-sync'}>
+                  {busy === 'tasks-sync' ? <Loader2 size={16} className="spin" /> : <ClipboardCheck size={16} />}
+                  Sync existing to-dos now
+                </button>
+              </div>
+
+              <div className="automation-footer">
+                <p>For reliable live delivery, connect this schedule to the protected Render Cron endpoint after deployment. The app will also check while the web service is running.</p>
+                <button className="btn btn-primary" onClick={handleSaveAutomation} disabled={busy === 'automation-save'}>
+                  {busy === 'automation-save' ? <Loader2 size={16} className="spin" /> : <CheckCircle2 size={16} />}
+                  Save weekly automation
+                </button>
+              </div>
+            </div>
           </>
         )}
       </div>

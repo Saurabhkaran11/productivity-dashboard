@@ -24,6 +24,23 @@ class EmailSettings(BaseModel):
     recipient: Optional[str] = None
 
 
+class AutomationSettings(BaseModel):
+    """User-controlled Google productivity automations.
+
+    These are intentionally opt-in.  Connecting a Google product never starts
+    recurring exports or email by itself.
+    """
+
+    weekly_report: int = 0
+    weekly_report_day: int = 0
+    weekly_report_time: str = "09:00"
+    weekly_timezone: str = "UTC"
+    auto_sync_sheets: int = 0
+    auto_sync_drive: int = 0
+    auto_sync_tasks: int = 0
+    todo_google_sync: int = 1
+
+
 class GoogleTaskCreate(BaseModel):
     title: str
     notes: Optional[str] = None

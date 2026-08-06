@@ -1943,10 +1943,45 @@ body::before {
 .google-settings-tool strong { color: var(--text-strong); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .google-settings-tool > div > span { color: var(--text-faint); font-size: 10px; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* Weekly Google automation controls */
+.automation-settings { margin-top: 24px; }
+.automation-heading { align-items: flex-start; display: flex; gap: 16px; justify-content: space-between; }
+.automation-heading h4 { align-items: center; display: flex; gap: 7px; margin: 3px 0 5px; }
+.automation-heading p { color: var(--text-dim); font-size: 13px; line-height: 1.5; margin: 0; max-width: 650px; }
+.automation-schedule-row { margin-top: 16px; }
+.automation-option-grid { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 4px 0 12px; }
+.automation-option, .automation-inline-option {
+  align-items: flex-start;
+  background: color-mix(in srgb, var(--bg), var(--surface) 56%);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text-dim);
+  cursor: pointer;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+  padding: 13px;
+}
+.automation-option.is-on, .automation-inline-option:has(input:checked) {
+  background: color-mix(in srgb, var(--accent), transparent 91%);
+  border-color: color-mix(in srgb, var(--accent), transparent 45%);
+}
+.automation-option input, .automation-inline-option input { accent-color: var(--accent); flex: 0 0 auto; margin: 3px 0 0; }
+.automation-option svg { color: var(--accent-soft); flex: 0 0 auto; margin-top: 1px; }
+.automation-option span, .automation-inline-option span { display: flex; flex-direction: column; min-width: 0; }
+.automation-option strong, .automation-inline-option strong { color: var(--text-strong); font-size: 13px; }
+.automation-option small, .automation-inline-option small { color: var(--text-faint); font-size: 11px; line-height: 1.45; margin-top: 3px; }
+.automation-todo-row { align-items: center; display: flex; gap: 12px; justify-content: space-between; margin-top: 10px; }
+.automation-inline-option { flex: 1; }
+.automation-footer { align-items: center; border-top: 1px solid color-mix(in srgb, var(--border), transparent 24%); display: flex; gap: 16px; justify-content: space-between; margin-top: 14px; padding-top: 14px; }
+.automation-footer p { color: var(--text-faint); font-size: 11px; line-height: 1.45; margin: 0; max-width: 620px; }
+
 @media (max-width: 600px) {
   .google-product-manager { padding: 18px; }
   .google-product-manager-heading { align-items: stretch; flex-direction: column; }
   .google-product-heading-actions { justify-content: flex-start; }
   .settings-section-heading, .google-settings-catalog-heading { align-items: flex-start; flex-direction: column; }
   .google-settings-status-grid { grid-template-columns: 1fr; }
+  .automation-heading, .automation-footer, .automation-todo-row { align-items: stretch; flex-direction: column; }
+  .automation-option-grid { grid-template-columns: 1fr; }
 }
