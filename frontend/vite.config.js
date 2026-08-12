@@ -18,8 +18,13 @@ export default defineConfig({
     chunkSizeWarningLimit: 900,
     rollupOptions: {
       output: {
-        manualChunks: {
-          three: ['three', '@react-three/fiber'],
+        // Vite 8's Rolldown adapter accepts the Rollup function form here.
+        // Keep the WebGL runtime isolated without relying on the removed
+        // object-form manualChunks configuration.
+        manualChunks(id) {
+          if (id.includes('node_modules/three') || id.includes('node_modules/@react-three/fiber')) {
+            return 'three'
+          }
         },
       },
     },
