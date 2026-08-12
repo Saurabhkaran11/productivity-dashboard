@@ -20,6 +20,10 @@ backend/.env
 .env
 .env.local
 
+# ...but DO track example templates so contributors know which vars to set:
+!backend/.env.example
+!frontend/.env.example
+
 # Node / frontend
 frontend/node_modules/
 frontend/dist/

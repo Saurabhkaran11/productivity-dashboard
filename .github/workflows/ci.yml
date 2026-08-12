@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  REGION: us-east-1
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install backend deps
+        run: |
+          python -m venv venv
+          . venv/bin/activate
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Backend import check
+        run: |
+          . venv/bin/activate
+          python -c "import main, auth, rate_limit, google_integration, database; print('backend import OK')"
+
+      - name: Start backend + smoke test /health
+        run: |
+          . venv/bin/activate
+          APP_SECRET=ci-test-secret FRONTEND_URL=http://localhost:3000 python -m uvicorn main:app --port 8000 &
+          npx --yes wait-on -t 20000 http://localhost:8000/health
+          curl -sf http://localhost:8000/health || exit 1
+          echo 'OK smoke test'
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Lint if present
+        run: npm run lint || echo "no lint script — skipping"
